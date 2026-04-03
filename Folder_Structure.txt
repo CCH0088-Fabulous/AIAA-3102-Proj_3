@@ -1,0 +1,84 @@
+video-object-removal-inpainting/          ← 仓库根目录（建议 repo 名简洁且含关键词）
+├── README.md                            ← 核心入口（必须包含所有运行命令、表格、GIF/视频截图）
+├── .gitignore                           ← 忽略大文件
+├── requirements.txt                     ← pip freeze 导出（或 environment.yml）
+├── environment.yml                      ← conda 环境（强烈推荐）
+│
+├── configs/                             ← 所有超参集中管理（YAML）
+│   ├── part1_baseline.yaml
+│   ├── part2_sota.yaml                  ← 可选 Track-Anything / SAM2 / VGGT4D
+│   ├── part3_exploration.yaml
+│   └── common.yaml                      ← 共享参数（视频路径、输出分辨率等）
+│
+├── data/                                ← 原始数据与处理脚本（.gitignore 建议加 *.mp4）
+│   ├── raw/                             ← 原始视频（勿 commit 大文件）
+│   │   ├── wild_video.mp4               暂时还没有，之后补充
+│   │   ├── bmx-trees/
+│   │   ├── tennis/
+│   │   └── davis/                       ← DAVIS 子文件夹
+│   ├── scripts/                         ← 数据预处理脚本
+│   │   ├── download_davis.py
+│   │   └── preprocess_videos.py         ← 统一转 30fps、480p
+│   └── processed/                       ← 预处理后视频（可选 symlink）
+│
+├── src/                                 ← 核心代码（模块化，最重要部分）
+│   ├── common/                          ← 共享工具函数
+│   │   ├── optical_flow.py              ← Lucas-Kanade（Part1 用）
+│   │   ├── mask_utils.py
+│   │   ├── metrics.py                   ← IoU / PSNR / SSIM
+│   │   └── visualization.py             ← 绘制对比图、flowchart overlay
+│   ├── part1_baseline/
+│   │   ├── mask_extraction_yolo.py
+│   │   ├── dynamic_judgment.py
+│   │   ├── inpaint_traditional.py       ← cv2.inpaint + temporal propagation
+│   │   └── pipeline_part1.py            ← 主入口
+│   ├── part2_sota/
+│   │   ├── mask_xxx.py                  ← TrackAnything / SAM2 / VGGT4D（任选其一）
+│   │   ├── inpaint_pro_painter.py       ← ProPainter 主调用
+│   │   └── pipeline_part2.py
+│   └── part3_exploration/
+│       ├── sam3_upgrade.py              ← Direction A
+│       ├── diffusion_controlnet.py      ← Direction C（推荐）
+│       ├── pipeline_part3.py
+│       └── ablation/                    ← 存放 ablation 实验脚本
+│
+├── models/                              ← 预训练权重（.gitignore + download 脚本）
+│   ├── yolo_v8_seg.pt
+│   ├── sam2/                            ← SAM2 checkpoint 文件夹
+│   ├── propainter/                      ← ProPainter 权重
+│   └── ...                              ← 其他（如 SAM3、VGGT4D）
+│
+├── results/                             ← 所有实验输出（报告直接使用）
+│   ├── masks/                           ← 每种方法、每个视频的 mask 序列（.png 或 .npz）
+│   │   ├── part1/
+│   │   ├── part2/
+│   │   └── part3/
+│   ├── videos/                          ← 处理后的最终视频（Mandatory Datasets 必须在这里）
+│   │   ├── part1/
+│   │   ├── part2/
+│   │   └── part3/
+│   │       ├── wild_video_part3.mp4
+│   │       ├── bmx-trees_part3.mp4
+│   │       └── tennis_part3.mp4         ← 提交 videos.zip 直接从这里打包
+│   ├── visualizations/                  ← 高质量报告素材
+│   │   ├── flowcharts/                  ← draw.io / TikZ 导出的 PDF/PNG
+│   │   ├── comparisons/                 ← before-after 对比图（每 Part 每帧）
+│   │   ├── failure_cases/               ← Part3 必须展示的 artifact 图
+│   │   └── qualitative/                 ← 网格对比图（用于 Experiments 章节）
+│   ├── metrics/                         ← 定量结果
+│   │   ├── iou_results.csv
+│   │   ├── psnr_ssim.csv
+│   │   └── tables/                      ← LaTeX 表格直接复制
+│   └── logs/                            ← 运行日志（可选）
+│
+├── figures/                             ← 报告最终使用的图（与 results/visualizations 软链接或复制）
+│   ├── pipeline_overview.pdf
+│   ├── qualitative_comparison.png
+│   └── quantitative_table.pdf
+│
+└── scripts/                             ← 顶层运行脚本，暂时不考虑（方便 Canvas Demo）
+    ├── run_part1.sh
+    ├── run_part2.sh
+    ├── run_part3.sh
+    ├── generate_videos_zip.sh           ← 自动打包 videos.zip
+    └── evaluate_metrics.py              ← 统一计算所有指标
