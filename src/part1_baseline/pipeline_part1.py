@@ -21,6 +21,13 @@ from common.config import (
     resolve_sequence_spec,
 )
 from common.mask_utils import postprocess_mask
+from common.visualization import (
+    ensure_visualization_dirs,
+    render_before_after_comparison,
+    render_mask_overlay,
+    render_motion_score_overlay,
+    save_visualization_frame,
+)
 from dynamic_judgment import DynamicObjectJudge
 from inpaint_traditional import TraditionalVideoInpainter
 from mask_extraction_yolo import MaskExtractorYOLO
@@ -79,6 +86,7 @@ def main():
     datasets_dir = sequence_spec["frames_dir"]
     output_mask_dir = get_phase_output_dir(baseline_cfg, "masks_dir")
     output_video_dir = get_phase_output_dir(baseline_cfg, "videos_dir")
+    output_visualization_dir = get_phase_output_dir(baseline_cfg, "visualizations_dir")
     sequence_name = sequence_spec["output_name"]
     mask_dir = build_mask_output_path(output_mask_dir, sequence_name)
     phase_slug = baseline_cfg.get("phase", {}).get("slug", "part1")
@@ -88,6 +96,7 @@ def main():
     dynamic_cfg = pipeline_cfg.get("dynamic_filter", {})
     postprocess_cfg = pipeline_cfg.get("postprocess", {})
     inpainting_cfg = pipeline_cfg.get("inpainting", {})
+    visualization_cfg = pipeline_cfg.get("visualization", {})
     target_classes = baseline_cfg.get("pipeline", {}).get("mask_extraction", {}).get(
         "target_classes",
         [],
@@ -123,6 +132,11 @@ def main():
     previous_frame = None
     frames = []
     merged_masks = []
+    mask_overlay_frames = []
+    motion_summaries_per_frame = []
+    visualization_dirs = None
+    if visualization_cfg.get("enabled", False):
+        visualization_dirs = ensure_visualization_dirs(output_visualization_dir, sequence_name)
 
     print(f"Using dataset folder: {datasets_dir}")
     print(f"Canonical sequence name: {sequence_name}")
@@ -146,6 +160,8 @@ def main():
             dynamic_masks = masks
             motion_summaries = []
 
+        motion_summaries_per_frame.append(motion_summaries)
+
         merged_mask = merge_instance_masks(dynamic_masks, frame.shape)
         merged_mask = postprocess_mask(
             merged_mask,
@@ -154,8 +170,37 @@ def main():
         )
         merged_masks.append(merged_mask)
 
+        mask_overlay_frame = render_mask_overlay(
+            frame,
+            merged_mask,
+            overlay_alpha=visualization_cfg.get("overlay_alpha", 0.35),
+        )
+        mask_overlay_frames.append(mask_overlay_frame)
+
         mask_path = os.path.join(mask_dir, build_frame_filename(common_cfg, i, artifact="mask"))
         save_mask(merged_mask, mask_path)
+
+        if visualization_dirs and visualization_cfg.get("save_motion_scores", True):
+            motion_overlay_frame = render_motion_score_overlay(
+                frame,
+                masks,
+                motion_summaries,
+                overlay_alpha=visualization_cfg.get("overlay_alpha", 0.35),
+                draw_flow_vectors=visualization_cfg.get("draw_flow_vectors", True),
+                max_flow_vectors=visualization_cfg.get("max_flow_vectors", 20),
+            )
+            motion_output_path = os.path.join(
+                visualization_dirs["motion_scores"],
+                build_frame_filename(common_cfg, i, artifact="frame"),
+            )
+            save_visualization_frame(motion_overlay_frame, motion_output_path)
+
+        if visualization_dirs and visualization_cfg.get("save_mask_overlays", True):
+            mask_overlay_path = os.path.join(
+                visualization_dirs["mask_overlays"],
+                build_frame_filename(common_cfg, i, artifact="frame"),
+            )
+            save_visualization_frame(mask_overlay_frame, mask_overlay_path)
 
         kept_instances = len(dynamic_masks)
         total_instances = len(masks)
@@ -194,6 +239,23 @@ def main():
         codec=video_cfg.get("codec", "mp4v"),
     )
     print(f"Saved inpainted video to {video_path}")
+
+    if visualization_dirs and visualization_cfg.get("save_comparisons", True):
+        print("Saving comparison visualizations...")
+        for index, (original_frame, mask_overlay_frame, restored_frame) in enumerate(
+            zip(frames, mask_overlay_frames, restored_frames)
+        ):
+            comparison_frame = render_before_after_comparison(
+                original_frame,
+                mask_overlay_frame,
+                restored_frame,
+            )
+            comparison_output_path = os.path.join(
+                visualization_dirs["comparisons"],
+                build_frame_filename(common_cfg, index, artifact="frame"),
+            )
+            save_visualization_frame(comparison_frame, comparison_output_path)
+        print(f"Saved visualizations under {visualization_dirs['base']}")
 
 if __name__ == '__main__':
     main()
