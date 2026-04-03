@@ -14,6 +14,11 @@ def build_mask_output_path(mask_root, sequence_name):
     return mask_dir
 
 
+def build_video_output_path(video_root, video_filename):
+    os.makedirs(video_root, exist_ok=True)
+    return os.path.join(video_root, video_filename)
+
+
 def merge_instance_masks(masks, frame_shape):
     merged_mask = np.zeros(frame_shape[:2], dtype=np.uint8)
     for mask in masks:
@@ -24,3 +29,23 @@ def merge_instance_masks(masks, frame_shape):
 def save_mask(mask, output_path):
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     cv2.imwrite(output_path, mask)
+
+
+def write_video(frames, output_path, fps=30, codec="mp4v"):
+    if not frames:
+        raise ValueError("Cannot write a video without frames.")
+
+    height, width = frames[0].shape[:2]
+    fourcc = cv2.VideoWriter_fourcc(*codec)
+    writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+
+    if not writer.isOpened():
+        raise RuntimeError(f"Failed to open video writer for output path: {output_path}")
+
+    try:
+        for frame in frames:
+            if frame.shape[:2] != (height, width):
+                frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_LINEAR)
+            writer.write(frame)
+    finally:
+        writer.release()

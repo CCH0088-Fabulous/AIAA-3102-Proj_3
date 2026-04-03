@@ -13,6 +13,7 @@ if str(SRC_DIR) not in sys.path:
 
 from common.config import (
     build_frame_filename,
+    build_video_filename,
     collect_image_paths,
     ensure_phase_output_dirs,
     get_phase_output_dir,
@@ -21,8 +22,9 @@ from common.config import (
 )
 from common.mask_utils import postprocess_mask
 from dynamic_judgment import DynamicObjectJudge
+from inpaint_traditional import TraditionalVideoInpainter
 from mask_extraction_yolo import MaskExtractorYOLO
-from utils import build_mask_output_path, merge_instance_masks, save_mask
+from utils import build_mask_output_path, build_video_output_path, merge_instance_masks, save_mask, write_video
 
 
 def parse_args():
@@ -76,13 +78,16 @@ def main():
 
     datasets_dir = sequence_spec["frames_dir"]
     output_mask_dir = get_phase_output_dir(baseline_cfg, "masks_dir")
+    output_video_dir = get_phase_output_dir(baseline_cfg, "videos_dir")
     sequence_name = sequence_spec["output_name"]
     mask_dir = build_mask_output_path(output_mask_dir, sequence_name)
+    phase_slug = baseline_cfg.get("phase", {}).get("slug", "part1")
 
     segmentation_cfg = baseline_cfg.get("models", {}).get("segmentation", {})
     pipeline_cfg = baseline_cfg.get("pipeline", {})
     dynamic_cfg = pipeline_cfg.get("dynamic_filter", {})
     postprocess_cfg = pipeline_cfg.get("postprocess", {})
+    inpainting_cfg = pipeline_cfg.get("inpainting", {})
     target_classes = baseline_cfg.get("pipeline", {}).get("mask_extraction", {}).get(
         "target_classes",
         [],
@@ -109,17 +114,26 @@ def main():
         feature_params=dynamic_cfg.get("feature_params", {}),
         lk_params=dynamic_cfg.get("lk_params", {}),
     )
+    inpainter = TraditionalVideoInpainter(
+        temporal_window=inpainting_cfg.get("temporal_window", 3),
+        spatial_fallback=inpainting_cfg.get("spatial_fallback", "telea"),
+        radius=inpainting_cfg.get("radius", 3.0),
+    )
     mask_history = deque(maxlen=max(int(postprocess_cfg.get("temporal_window", 1)) - 1, 0))
     previous_frame = None
+    frames = []
+    merged_masks = []
 
     print(f"Using dataset folder: {datasets_dir}")
     print(f"Canonical sequence name: {sequence_name}")
-    print(f"Found {len(image_paths)} frames. Starting processing...")
+    print(f"Found {len(image_paths)} frames. Starting mask extraction...")
 
     for i, img_path in enumerate(image_paths):
         frame = cv2.imread(img_path)
         if frame is None:
             continue
+
+        frames.append(frame)
 
         masks, bboxes, class_ids = extractor.extract(frame)
         if dynamic_cfg.get("enabled", False):
@@ -138,6 +152,7 @@ def main():
             postprocess_cfg=postprocess_cfg,
             previous_masks=list(mask_history),
         )
+        merged_masks.append(merged_mask)
 
         mask_path = os.path.join(mask_dir, build_frame_filename(common_cfg, i, artifact="mask"))
         save_mask(merged_mask, mask_path)
@@ -154,6 +169,31 @@ def main():
         if merged_mask is not None:
             mask_history.append(merged_mask)
         previous_frame = frame
+
+    if not frames:
+        print("No valid frames were loaded. Skipping inpainting and video export.")
+        return
+
+    print("Starting temporal propagation and spatial fallback inpainting...")
+    restored_frames, inpainting_stats = inpainter.inpaint_sequence(frames, merged_masks)
+
+    total_temporal_pixels = sum(stat["temporal_filled_pixels"] for stat in inpainting_stats)
+    total_fallback_pixels = sum(stat["fallback_pixels"] for stat in inpainting_stats)
+    print(
+        f"Inpainting complete | temporal-filled pixels: {total_temporal_pixels} | "
+        f"fallback pixels: {total_fallback_pixels}"
+    )
+
+    video_cfg = common_cfg.get("formats", {}).get("video", {})
+    video_filename = build_video_filename(common_cfg, sequence_name, phase_slug)
+    video_path = build_video_output_path(output_video_dir, video_filename)
+    write_video(
+        restored_frames,
+        video_path,
+        fps=video_cfg.get("fps", 30),
+        codec=video_cfg.get("codec", "mp4v"),
+    )
+    print(f"Saved inpainted video to {video_path}")
 
 if __name__ == '__main__':
     main()
