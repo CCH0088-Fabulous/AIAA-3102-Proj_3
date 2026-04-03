@@ -1,8 +1,47 @@
-# For part 1 baseline configuration hyperparameters
-model:
-  yolo_seg_path: "models/yolo_v8_seg/yolov8x-seg.pt"
+phase:
+  name: "part1_baseline"
+  slug: "part1"
+  entrypoint: "src/part1_baseline/pipeline_part1.py"
+  outputs:
+    masks_dir: "results/masks/part1"
+    videos_dir: "results/videos/part1"
+    visualizations_dir: "results/visualizations/part1"
 
-extraction:
-  target_classes:
-    - 0  # Person
-    - 1  # Bicycle
+models:
+  segmentation:
+    backend: "yolov8-seg"
+    weights: "models/yolo_v8_seg/yolov8x-seg.pt"
+
+pipeline:
+  input:
+    sequence_key: "bmx-trees"
+  mask_extraction:
+    target_classes:
+      - 0  # Person
+      - 1  # Bicycle
+  dynamic_filter:
+    enabled: true
+    motion_threshold: 1.5
+    min_tracked_points: 8
+    aggregation: "median"
+    keep_if_undetermined: true
+    feature_params:
+      max_corners: 200
+      quality_level: 0.01
+      min_distance: 5
+      block_size: 7
+      mask_dilate_kernel_size: 5
+    lk_params:
+      win_size: 21
+      max_level: 3
+      max_backward_error: 1.5
+  postprocess:
+    dilate_kernel_size: 5
+    dilate_iterations: 1
+    fill_holes: true
+    min_component_area: 64
+    temporal_window: 3
+    temporal_min_votes: 2
+  inpainting:
+    temporal_window: 3
+    spatial_fallback: "telea"
