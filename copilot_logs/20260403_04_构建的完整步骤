@@ -1,0 +1,33 @@
+# P1
+根据附件中的要求、仓库中的代码和 Folder_Structure.txt 的总体要求，深度分析构建剩余的步骤，将剩余的步骤分阶段详细讲解
+
+我已经具备足够上下文来落地成正式计划。接下来我会把“现状诊断 + 分阶段剩余步骤 + 验证与边界”整理进会话计划文件，并把可执行版本直接展示给你审阅。
+
+
+**现状判断**
+当前仓库只完成了 Part 1 的第一小段主干，还没有形成“完整可运行的基线”。现有可复用部分主要是 pipeline_part1.py、mask_extraction_yolo.py、utils.py 和基础配置 common.yaml、part1_baseline.yaml。它们已经能做数据集路径解析、YOLOv8-Seg 推理、实例掩码合并和逐帧掩码保存。
+
+真正缺失的部分正好对应附件和 Folder_Structure.txt 的核心要求：optical_flow.py、mask_utils.py、metrics.py、visualization.py、inpaint_traditional.py、README.md 目前基本为空；part2_sota 和 part3_exploration 也还是空目录。再结合附件要求，可以明确判断：仓库现在只实现了“语义掩码提取”，还没有实现“动态判断、时序传播修复、传统 inpainting、视频导出、指标评估、SOTA 管线、探索改进、最终提交物”。
+
+**分阶段计划**
+1. Phase 0，先做仓库结构和接口对齐。优先统一 common.yaml、part1_baseline.yaml、part2_sota.yaml、part3_exploration.yaml 的字段规范，明确数据集键名、帧命名、mask 格式、视频输出路径、模型权重路径。这里必须先处理两个隐患：一是 `bmx_trees` 和 `bmx-trees` 的命名不一致，二是 Folder_Structure.txt 要求的脚本名和当前仓库实际文件并不完全对应。如果这一步不先做，后面 Part 2、Part 3 和评估脚本会各自定义输入输出，最终很难汇总。
+
+2. Phase 1，补齐 Part 1 的动态目标筛选。附件要求不是“检测到人/自行车就删掉”，而是“检测后再判断是否真的在运动”。因此要在 optical_flow.py 实现 Lucas-Kanade 稀疏光流工具，在 part1_baseline 下补一个动态判断模块，把 YOLO 的每个候选实例送进运动幅度统计，再依据阈值保留动态目标、剔除静态目标。随后把膨胀、孔洞填补、连通域去噪、短时序平滑放进 mask_utils.py。这一步是 Part 1 的关键，因为它决定后面修复时到底删谁、不删谁。
+
+3. Phase 2，完成 Part 1 的传统修复主链路。附件明确要求“优先时序背景传播，空间 inpainting 作为 fallback”，所以 inpaint_traditional.py 不应该只包一层 `cv2.inpaint`，而应先做一个时间窗背景借用策略：优先从前后帧同位置寻找未遮挡像素补洞，剩余无法补齐的区域再交给 Telea 或 Navier-Stokes。然后把 pipeline_part1.py 从“只导出 mask”的入口升级成“掩码生成 -> 动态筛选 -> 修复 -> 导出视频”的完整流水线。到这一步，Part 1 才算真正符合附件目标。
+
+4. Phase 3，搭建统一评估和可视化。当前 metrics.py 与 visualization.py 还是占位，因此需要补齐 IoU、PSNR、SSIM，以及掩码叠加图、前后对比图、failure case 导出。评估上建议把 DAVIS 作为定量主集，因为它有标注和更规范的序列；`bmx-trees`、`tennis`、wild video 更适合做定性展示。这个阶段在 Part 1 输出格式稳定后，可以和 Part 2 原型并行推进。
+
+5. Phase 4，落地 Part 2 的 SOTA 主线。就当前仓库结构看，优先建议走“高质量视频掩码 + ProPainter”这条最稳的路径，而不是一开始并行尝试多个大模型。因为 sam2 已经预留，Part 2 更适合先用 SAM 2 做视频掩码，再在 part2_sota 中封装 ProPainter 调用，统一输出到现有结果目录。这样能最大化复用前面已经定义好的 mask、video、metrics 规范，也更容易和 Part 1 做公平对比。
+
+6. Phase 5，做 Part 3 的探索改进，但要基于失败案例，而不是凭空加模型。合理顺序是先跑通 Part 2，再从 artifact、掩码漏检、边界抖动、纹理不连续这些具体问题里选一个最值得优化的方向，然后在 part3_exploration 中做定向改进。也就是说，Part 3 的价值不在“技术名词更大”，而在“能拿出证据说明 Part 2 为什么失败、你如何针对性修复”。
+
+7. Phase 6，最后补齐交付物。现在 README.md 为空，而 Folder_Structure.txt 和 Overall_Plan.md 对 README、结果目录、打包脚本、指标表格、演示视频都有明确要求，所以收尾阶段必须把运行命令、依赖、结果展示、`videos.zip` 打包流程、对比图与表格导出全部固定下来。这个阶段不难，但如果拖到最后再做，通常最容易漏项。
+
+**关键结论**
+这套仓库当前最合理的推进顺序不是直接做 Part 2，而是先把 Part 1 补成“真正完整的 baseline”，因为 Part 1 决定了后续所有目录规范、评估脚本和报告对比基线。简单说，剩余工作不是“继续补一点代码”，而是要按“接口统一 -> Part 1 完整化 -> 评估可视化 -> Part 2 -> Part 3 -> 文档提交”的依赖链推进。
+
+我已经把这份计划保存为会话计划，后续可以继续细化。如果你愿意，我下一轮可以继续做两种细化之一：
+1. 把 Phase 0 到 Phase 2 细化成“逐文件、逐函数”的实现清单。
+2. 把整个计划改写成“周计划 / 里程碑计划”，方便你们分工协作。
+
