@@ -1,7 +1,7 @@
 import math
 
-import cv2
 import numpy as np
+from scipy.ndimage import gaussian_filter
 
 
 def _ensure_same_shape(array_a, array_b, name_a="array_a", name_b="array_b"):
@@ -13,11 +13,11 @@ def _ensure_same_shape(array_a, array_b, name_a="array_a", name_b="array_b"):
 
 
 def normalize_binary_mask(mask):
-	if mask is None:
-		raise ValueError("Expected a valid mask array, but received None.")
-	if mask.ndim == 3:
-		mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
-	return (mask > 0).astype(np.uint8)
+    if mask is None:
+        raise ValueError("Expected a valid mask array, but received None.")
+    if mask.ndim == 3:
+        mask = np.mean(mask, axis=2)
+    return (mask > 0).astype(np.uint8)
 
 
 def compute_iou(predicted_mask, reference_mask):
@@ -36,12 +36,27 @@ def compute_iou(predicted_mask, reference_mask):
 
 
 def build_background_valid_mask(predicted_mask, reference_mask=None):
-	predicted = normalize_binary_mask(predicted_mask).astype(bool)
-	combined_foreground = predicted
-	if reference_mask is not None:
+	if predicted_mask is None and reference_mask is None:
+		raise ValueError("Expected at least one mask to build background valid mask.")
+
+	if predicted_mask is None:
+		predicted = None
+	else:
+		predicted = normalize_binary_mask(predicted_mask).astype(bool)
+
+	if reference_mask is None:
+		reference = None
+	else:
 		reference = normalize_binary_mask(reference_mask).astype(bool)
+
+	if predicted is None:
+		combined_foreground = reference
+	elif reference is None:
+		combined_foreground = predicted
+	else:
 		_ensure_same_shape(predicted, reference, "predicted_mask", "reference_mask")
-		combined_foreground = np.logical_or(combined_foreground, reference)
+		combined_foreground = np.logical_or(predicted, reference)
+
 	return (~combined_foreground).astype(np.uint8)
 
 
@@ -90,17 +105,19 @@ def compute_ssim(reference_image, compared_image, valid_mask=None, data_range=25
 		channel_reference = reference[..., channel_index]
 		channel_compared = compared[..., channel_index]
 
-		mu_reference = cv2.GaussianBlur(channel_reference, kernel_size, sigma)
-		mu_compared = cv2.GaussianBlur(channel_compared, kernel_size, sigma)
+		truncate = (kernel_size[0] - 1) / (2.0 * sigma)
+		mu_reference = gaussian_filter(channel_reference, sigma=sigma, truncate=truncate)
+		mu_compared = gaussian_filter(channel_compared, sigma=sigma, truncate=truncate)
 
 		mu_reference_sq = mu_reference ** 2
 		mu_compared_sq = mu_compared ** 2
 		mu_reference_compared = mu_reference * mu_compared
 
-		sigma_reference_sq = cv2.GaussianBlur(channel_reference ** 2, kernel_size, sigma) - mu_reference_sq
-		sigma_compared_sq = cv2.GaussianBlur(channel_compared ** 2, kernel_size, sigma) - mu_compared_sq
+		sigma_reference_sq = gaussian_filter(channel_reference ** 2, sigma=sigma, truncate=truncate) - mu_reference_sq
+		sigma_compared_sq = gaussian_filter(channel_compared ** 2, sigma=sigma, truncate=truncate) - mu_compared_sq
 		sigma_reference_compared = (
-			cv2.GaussianBlur(channel_reference * channel_compared, kernel_size, sigma) - mu_reference_compared
+			gaussian_filter(channel_reference * channel_compared, sigma=sigma, truncate=truncate)
+			- mu_reference_compared
 		)
 
 		numerator = (2 * mu_reference_compared + c1) * (2 * sigma_reference_compared + c2)

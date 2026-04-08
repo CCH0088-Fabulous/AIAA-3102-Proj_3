@@ -1,12 +1,14 @@
 import argparse
 import csv
+import glob
 import math
 import os
 import sys
 from pathlib import Path
 
-import cv2
+import imageio
 import numpy as np
+from PIL import Image
 
 CURRENT_DIR = Path(__file__).resolve().parent
 SRC_DIR = CURRENT_DIR.parent / "src"
@@ -90,47 +92,77 @@ def load_video_frames(video_path, max_frames=None):
     if not os.path.isfile(video_path):
         raise FileNotFoundError(f"Restored video not found: {video_path}")
 
-    capture = cv2.VideoCapture(video_path)
+    reader = imageio.get_reader(video_path)
     frames = []
     try:
-        while True:
-            success, frame = capture.read()
-            if not success:
-                break
+        for frame in reader:
             frames.append(frame)
             if max_frames is not None and len(frames) >= max_frames:
                 break
     finally:
-        capture.release()
+        reader.close()
     return frames
 
 
-def read_image(path, read_flag=cv2.IMREAD_COLOR):
-    image = cv2.imread(path, read_flag)
-    if image is None:
-        raise ValueError(f"Failed to read image: {path}")
-    return image
+def read_image(path, mode="RGB"):
+    try:
+        image = Image.open(path)
+    except Exception as exc:
+        raise ValueError(f"Failed to read image: {path}") from exc
+
+    if mode == "RGB":
+        image = image.convert("RGB")
+    elif mode == "L":
+        image = image.convert("L")
+    else:
+        image = image.convert("RGB")
+    return np.array(image)
 
 
-def load_images_from_dir(directory, common_cfg, max_frames=None, read_flag=cv2.IMREAD_COLOR):
+def resolve_mask_directory(mask_dir, common_cfg):
+    if not mask_dir or not os.path.isdir(mask_dir):
+        return mask_dir
+
+    image_paths = collect_image_paths(mask_dir, common_cfg)
+    if image_paths:
+        return mask_dir
+
+    combined_dir = os.path.join(mask_dir, "combined")
+    if os.path.isdir(combined_dir):
+        combined_paths = collect_image_paths(combined_dir, common_cfg)
+        if combined_paths:
+            return combined_dir
+
+    return mask_dir
+
+
+def load_images_from_dir(directory, common_cfg, max_frames=None, mode="RGB"):
     if not directory or not os.path.isdir(directory):
-        return []
+        return [], []
     image_paths = collect_image_paths(directory, common_cfg)
     if max_frames is not None:
         image_paths = image_paths[:max_frames]
-    return [read_image(path, read_flag=read_flag) for path in image_paths], image_paths
+    return [read_image(path, mode=mode) for path in image_paths], image_paths
 
 
 def align_frame(prediction, reference):
     if prediction.shape[:2] == reference.shape[:2]:
         return prediction
-    return cv2.resize(prediction, (reference.shape[1], reference.shape[0]), interpolation=cv2.INTER_LINEAR)
+    return np.array(
+        Image.fromarray(prediction).resize(
+            (reference.shape[1], reference.shape[0]), resample=Image.BILINEAR
+        )
+    )
 
 
 def align_mask(prediction, reference):
     if prediction.shape[:2] == reference.shape[:2]:
         return prediction
-    return cv2.resize(prediction, (reference.shape[1], reference.shape[0]), interpolation=cv2.INTER_NEAREST)
+    return np.array(
+        Image.fromarray(prediction).resize(
+            (reference.shape[1], reference.shape[0]), resample=Image.NEAREST
+        )
+    )
 
 
 def summarize_numeric(values):
@@ -186,8 +218,8 @@ def evaluate_mask_iou(predicted_mask_dir, reference_mask_dir, common_cfg, phase_
     rows = []
     iou_scores = []
     for frame_index, (predicted_path, reference_path) in enumerate(zip(predicted_paths, reference_paths)):
-        predicted_mask = read_image(predicted_path, read_flag=cv2.IMREAD_GRAYSCALE)
-        reference_mask = read_image(reference_path, read_flag=cv2.IMREAD_GRAYSCALE)
+        predicted_mask = read_image(predicted_path, mode="L")
+        reference_mask = read_image(reference_path, mode="L")
         predicted_mask = align_mask(predicted_mask, reference_mask)
 
         iou_stats = compute_iou(predicted_mask, reference_mask)
@@ -246,7 +278,8 @@ def evaluate_video_quality(
                 predicted_mask = align_mask(predicted_mask, reference[..., 0] if reference.ndim == 3 else reference)
             if reference_mask is not None:
                 reference_mask = align_mask(reference_mask, reference[..., 0] if reference.ndim == 3 else reference)
-            valid_mask = build_background_valid_mask(predicted_mask, reference_mask)
+            if predicted_mask is not None or reference_mask is not None:
+                valid_mask = build_background_valid_mask(predicted_mask, reference_mask)
 
         psnr_value = compute_psnr(reference, restored, valid_mask=valid_mask)
         ssim_value = compute_ssim(reference, restored, valid_mask=valid_mask)
@@ -288,25 +321,42 @@ def main():
     phase_cfg = load_yaml_config(args.phase_config)
     ensure_phase_output_dirs(phase_cfg)
 
+    phase_name = phase_cfg.get("phase", {}).get("slug", phase_cfg.get("phase", {}).get("name", "phase"))
     metrics_root = common_cfg.get("paths", {}).get("metrics_root", "results/metrics")
-    ensure_dir(metrics_root)
+    phase_metrics_root = os.path.join(metrics_root, phase_name)
+    ensure_dir(phase_metrics_root)
 
     default_sequence = phase_cfg.get("pipeline", {}).get("input", {}).get(
         "sequence_key",
         common_cfg.get("project", {}).get("default_sequence", "bmx-trees"),
     )
     sequence_spec = resolve_sequence_spec(args.sequence or default_sequence, common_cfg)
-    phase_name = phase_cfg.get("phase", {}).get("slug", phase_cfg.get("phase", {}).get("name", "phase"))
+    sequence_name = sequence_spec["output_name"]
+    sequence_metrics_root = os.path.join(phase_metrics_root, sequence_name)
+    ensure_dir(sequence_metrics_root)
+    sequence_spec = resolve_sequence_spec(args.sequence or default_sequence, common_cfg)
     sequence_name = sequence_spec["output_name"]
 
     predicted_mask_dir = args.mask_dir or os.path.join(
         get_phase_output_dir(phase_cfg, "masks_dir"),
         sequence_name,
     )
-    predicted_video_path = args.video_path or os.path.join(
-        get_phase_output_dir(phase_cfg, "videos_dir"),
+    predicted_mask_dir = resolve_mask_directory(predicted_mask_dir, common_cfg)
+    output_video_dir = get_phase_output_dir(phase_cfg, "videos_dir")
+    default_video_path = os.path.join(
+        output_video_dir,
         build_video_filename(common_cfg, sequence_name, phase_name),
     )
+    predicted_video_path = args.video_path or default_video_path
+    if not os.path.isfile(predicted_video_path):
+        alternative_video_path = os.path.join(output_video_dir, f"{sequence_name}_inpainted.mp4")
+        if os.path.isfile(alternative_video_path):
+            predicted_video_path = alternative_video_path
+        else:
+            wildcard = os.path.join(output_video_dir, f"{sequence_name}*.mp4")
+            candidates = sorted(glob.glob(wildcard))
+            if candidates:
+                predicted_video_path = candidates[-1]
     reference_mask_dir = resolve_reference_mask_dir(args, common_cfg, sequence_spec)
 
     print(f"Evaluating phase: {phase_name}")
@@ -323,7 +373,7 @@ def main():
             sequence_name,
             max_frames=args.max_frames,
         )
-        iou_csv_path = os.path.join(metrics_root, "iou_results.csv")
+        iou_csv_path = os.path.join(sequence_metrics_root, "iou_results.csv")
         upsert_csv_rows(
             iou_csv_path,
             ["phase", "sequence", "frame_index", "predicted_file", "reference_file", "iou", "intersection", "union"],
@@ -340,13 +390,13 @@ def main():
         reference_dir,
         common_cfg,
         max_frames=args.max_frames,
-        read_flag=cv2.IMREAD_COLOR,
+        mode="RGB",
     )
     predicted_mask_frames, _ = load_images_from_dir(
         predicted_mask_dir,
         common_cfg,
         max_frames=args.max_frames,
-        read_flag=cv2.IMREAD_GRAYSCALE,
+        mode="L",
     )
     reference_mask_frames = []
     if reference_mask_dir:
@@ -354,7 +404,7 @@ def main():
             reference_mask_dir,
             common_cfg,
             max_frames=args.max_frames,
-            read_flag=cv2.IMREAD_GRAYSCALE,
+            mode="L",
         )
 
     evaluation_mode = "full_reference" if args.reference_frames_dir else "background_preservation"
@@ -367,7 +417,7 @@ def main():
         sequence_name,
         evaluation_mode,
     )
-    psnr_ssim_csv_path = os.path.join(metrics_root, "psnr_ssim.csv")
+    psnr_ssim_csv_path = os.path.join(sequence_metrics_root, "psnr_ssim.csv")
     upsert_csv_rows(
         psnr_ssim_csv_path,
         ["phase", "sequence", "frame_index", "evaluation_mode", "psnr", "ssim", "valid_pixels"],

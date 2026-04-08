@@ -1,0 +1,95 @@
+; ModuleID = 'LLVMDialectModule'
+source_filename = "LLVMDialectModule"
+target datalayout = "e-p3:32:32-p4:32:32-p5:32:32-p6:32:32-p7:32:32-i64:64-i128:128-i256:256-v16:16-v32:32-n16:32:64"
+
+; Function Attrs: nounwind
+define ptx_kernel void @triton_poi_fused__to_copy_add_mul_permute_view_24(ptr addrspace(1) %0, ptr addrspace(1) %1, ptr addrspace(1) %2, ptr addrspace(1) %3, i32 %4, ptr addrspace(1) readnone captures(none) %5, ptr addrspace(1) readnone captures(none) %6) local_unnamed_addr #0 !dbg !4 {
+  %8 = tail call i32 @llvm.nvvm.read.ptx.sreg.ctaid.x(), !dbg !7
+  %9 = shl i32 %8, 10, !dbg !8
+  %10 = tail call i32 @llvm.nvvm.read.ptx.sreg.tid.x(), !dbg !9
+  %11 = shl nuw nsw i32 %10, 2, !dbg !9
+  %12 = and i32 %11, 1020, !dbg !9
+  %13 = or disjoint i32 %12, %9, !dbg !10
+  %14 = srem i32 %13, 256, !dbg !11
+  %15 = sext i32 %13 to i64, !dbg !12
+  %16 = getelementptr bfloat, ptr addrspace(1) %0, i64 %15, !dbg !12
+  %17 = tail call { i32, i32 } asm sideeffect "mov.u32 $0, 0x0;\0A\09mov.u32 $1, 0x0;\0A\09ld.global.v2.b32 { $0, $1 }, [ $2 + 0 ];", "=r,=r,l"(ptr addrspace(1) %16) #2, !dbg !13
+  %18 = extractvalue { i32, i32 } %17, 0, !dbg !13
+  %19 = bitcast i32 %18 to <2 x bfloat>, !dbg !13
+  %20 = extractvalue { i32, i32 } %17, 1, !dbg !13
+  %21 = bitcast i32 %20 to <2 x bfloat>, !dbg !13
+  %22 = sext i32 %14 to i64, !dbg !14
+  %23 = getelementptr float, ptr addrspace(1) %1, i64 %22, !dbg !14
+  %24 = tail call i64 asm sideeffect "mov.u64 $0, 0x0;\0A\09createpolicy.fractional.L2::evict_last.b64 $0, 1.0;", "=l"() #2, !dbg !15
+  %25 = tail call { i32, i32, i32, i32 } asm sideeffect "mov.u32 $0, 0x0;\0A\09mov.u32 $1, 0x0;\0A\09mov.u32 $2, 0x0;\0A\09mov.u32 $3, 0x0;\0A\09ld.global.L1::evict_last.L2::cache_hint.v4.b32 { $0, $1, $2, $3 }, [ $4 + 0 ], $5;", "=r,=r,=r,=r,l,l"(ptr addrspace(1) %23, i64 %24) #2, !dbg !15
+  %26 = extractvalue { i32, i32, i32, i32 } %25, 0, !dbg !15
+  %27 = extractvalue { i32, i32, i32, i32 } %25, 1, !dbg !15
+  %28 = extractvalue { i32, i32, i32, i32 } %25, 2, !dbg !15
+  %29 = extractvalue { i32, i32, i32, i32 } %25, 3, !dbg !15
+  %30 = getelementptr bfloat, ptr addrspace(1) %2, i64 %15, !dbg !16
+  %31 = tail call { i32, i32 } asm sideeffect "mov.u32 $0, 0x0;\0A\09mov.u32 $1, 0x0;\0A\09ld.global.v2.b32 { $0, $1 }, [ $2 + 0 ];", "=r,=r,l"(ptr addrspace(1) %30) #2, !dbg !17
+  %32 = extractvalue { i32, i32 } %31, 0, !dbg !17
+  %33 = bitcast i32 %32 to <2 x bfloat>, !dbg !17
+  %34 = extractvalue { i32, i32 } %31, 1, !dbg !17
+  %35 = bitcast i32 %34 to <2 x bfloat>, !dbg !17
+  %36 = getelementptr bfloat, ptr addrspace(1) %3, i64 %15, !dbg !18
+  %37 = fpext <2 x bfloat> %19 to <2 x float>, !dbg !19
+  %38 = insertelement <2 x i32> poison, i32 %26, i64 0, !dbg !15
+  %39 = insertelement <2 x i32> %38, i32 %27, i64 1, !dbg !15
+  %40 = bitcast <2 x i32> %39 to <2 x float>, !dbg !15
+  %41 = fpext <2 x bfloat> %33 to <2 x float>, !dbg !20
+  %42 = fmul <2 x float> %40, %41, !dbg !21
+  %43 = fadd <2 x float> %42, %37, !dbg !22
+  %44 = fptrunc <2 x float> %43 to <2 x bfloat>, !dbg !23
+  %45 = fpext <2 x bfloat> %21 to <2 x float>, !dbg !19
+  %46 = insertelement <2 x i32> poison, i32 %28, i64 0, !dbg !15
+  %47 = insertelement <2 x i32> %46, i32 %29, i64 1, !dbg !15
+  %48 = bitcast <2 x i32> %47 to <2 x float>, !dbg !15
+  %49 = fpext <2 x bfloat> %35 to <2 x float>, !dbg !20
+  %50 = fmul <2 x float> %48, %49, !dbg !21
+  %51 = fadd <2 x float> %50, %45, !dbg !22
+  %52 = fptrunc <2 x float> %51 to <2 x bfloat>, !dbg !23
+  %53 = bitcast <2 x bfloat> %44 to i32, !dbg !23
+  %54 = bitcast <2 x bfloat> %52 to i32, !dbg !23
+  tail call void asm sideeffect "st.global.v2.b32 [ $2 + 0 ], { $0, $1 };", "r,r,l"(i32 %53, i32 %54, ptr addrspace(1) %36) #2, !dbg !23
+  ret void, !dbg !24
+}
+
+; Function Attrs: mustprogress nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare noundef range(i32 0, 2147483647) i32 @llvm.nvvm.read.ptx.sreg.ctaid.x() #1
+
+; Function Attrs: mustprogress nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare noundef range(i32 0, 1024) i32 @llvm.nvvm.read.ptx.sreg.tid.x() #1
+
+attributes #0 = { nounwind "nvvm.reqntid"="256" }
+attributes #1 = { mustprogress nocallback nofree nosync nounwind speculatable willreturn memory(none) }
+attributes #2 = { nounwind }
+
+!llvm.dbg.cu = !{!0}
+!llvm.module.flags = !{!2, !3}
+
+!0 = distinct !DICompileUnit(language: DW_LANG_C, file: !1, producer: "triton", isOptimized: true, runtimeVersion: 0, emissionKind: LineTablesOnly)
+!1 = !DIFile(filename: "cyqtp37tt5ru2uavwhdtv5e64zzj35ipxlv7n6jqcipksggaj2m5.py", directory: "/home/Shuai/AIAA3201_Project/AIAA-3102-Proj_3/.tmp/torchinductor_Shuai/yq")
+!2 = !{i32 2, !"Debug Info Version", i32 3}
+!3 = !{i32 4, !"nvvm-reflect-ftz", i32 1}
+!4 = distinct !DISubprogram(name: "triton_poi_fused__to_copy_add_mul_permute_view_24", linkageName: "triton_poi_fused__to_copy_add_mul_permute_view_24", scope: !1, file: !1, line: 18, type: !5, scopeLine: 18, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!5 = !DISubroutineType(cc: DW_CC_normal, types: !6)
+!6 = !{}
+!7 = !DILocation(line: 20, column: 28, scope: !4)
+!8 = !DILocation(line: 20, column: 33, scope: !4)
+!9 = !DILocation(line: 21, column: 36, scope: !4)
+!10 = !DILocation(line: 21, column: 23, scope: !4)
+!11 = !DILocation(line: 24, column: 19, scope: !4)
+!12 = !DILocation(line: 25, column: 30, scope: !4)
+!13 = !DILocation(line: 25, column: 35, scope: !4)
+!14 = !DILocation(line: 26, column: 30, scope: !4)
+!15 = !DILocation(line: 26, column: 35, scope: !4)
+!16 = !DILocation(line: 27, column: 30, scope: !4)
+!17 = !DILocation(line: 27, column: 35, scope: !4)
+!18 = !DILocation(line: 33, column: 25, scope: !4)
+!19 = !DILocation(line: 25, column: 44, scope: !4)
+!20 = !DILocation(line: 27, column: 44, scope: !4)
+!21 = !DILocation(line: 30, column: 18, scope: !4)
+!22 = !DILocation(line: 31, column: 18, scope: !4)
+!23 = !DILocation(line: 33, column: 36, scope: !4)
+!24 = !DILocation(line: 33, column: 4, scope: !4)

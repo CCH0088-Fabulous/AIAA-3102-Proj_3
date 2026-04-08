@@ -314,3 +314,79 @@ Part 2 and Part 3 entrypoints already exist, but only Part 1 is fully implemente
 - higher-quality SOTA mask generation and inpainting for Part 2
 - exploration and failure-case improvements for Part 3
 - report-oriented summary tables and final packaging scripts
+
+## Part 2 Progress
+
+Part 2 is now implemented beyond the initial interface scaffold. The current Part 2 workflow includes:
+
+- SAM2-based mask generation via sequence-specific `box`/`points` prompts in [configs/part2_sota.yaml](configs/part2_sota.yaml)
+- ProPainter video inpainting to produce coherent restored output
+- saved mask outputs separated into `objects/` and `combined/` for multi-object scenes
+- metrics evaluation updated to save results under `results/metrics/part2/<sequence>/`
+
+Current Part 2 outputs follow this structure:
+
+- `results/masks/part2/<sequence>/objects/`
+- `results/masks/part2/<sequence>/combined/`
+- `results/videos/part2/<sequence>_inpainted.mp4`
+- `results/metrics/part2/<sequence>/iou_results.csv`
+- `results/metrics/part2/<sequence>/psnr_ssim.csv`
+
+The evaluator now uses the `combined/` masks by default for overall foreground IoU when Part 2 produces multiple object masks.
+
+## Part 2 Run Commands
+
+### 1. Standard Part 2 Run
+
+```bash
+conda activate project3
+python src/part2_sota/pipeline_part2.py \
+	--sequence datasets \
+	--common-config configs/common.yaml \
+	--phase-config configs/part2_sota.yaml
+```
+
+### Example: Run Part 2 on a Specific Sequence
+
+```bash
+conda activate project3
+python src/part2_sota/pipeline_part2.py \
+	--sequence bmx-trees \
+	--common-config configs/common.yaml \
+	--phase-config configs/part2_sota.yaml
+```
+
+```bash
+conda activate project3
+python src/part2_sota/pipeline_part2.py \
+	--sequence tennis \
+	--common-config configs/common.yaml \
+	--phase-config configs/part2_sota.yaml
+```
+
+### 2. Evaluate Part 2 Results
+
+```bash
+conda activate project3
+python scripts/evaluate_metrics.py \
+	--phase-config configs/part2_sota.yaml \
+	--sequence datasets 
+```
+
+### Example: Evaluate Part 2 on a Specific Sequence
+
+```bash
+conda activate project3
+python scripts/evaluate_metrics.py \
+	--phase-config configs/part2_sota.yaml \
+	--sequence bmx-trees
+```
+
+```bash
+conda activate project3
+python scripts/evaluate_metrics.py \
+	--phase-config configs/part2_sota.yaml \
+	--sequence tennis
+```
+
+The evaluator also auto-detects the Part 2 video under `results/videos/part2/` when the standard `*_inpainted.mp4` naming pattern is used.
