@@ -3,24 +3,42 @@ import sys
 import os
 import numpy as np
 from pathlib import Path
+
+import cv2
 from PIL import Image
 
 CURRENT_DIR = Path(__file__).resolve().parent
 SRC_DIR = CURRENT_DIR.parent
-if str(SRC_DIR) not in sys.path:
-    sys.path.append(str(SRC_DIR))
+REPO_ROOT = SRC_DIR.parent
+for path in (CURRENT_DIR, SRC_DIR, REPO_ROOT):
+    path_str = str(path)
+    if path_str not in sys.path:
+        sys.path.append(path_str)
 
 from common.config import (
+    build_frame_filename,
+    collect_image_paths,
     ensure_phase_output_dirs,
+    get_phase_output_dir,
     load_yaml_config,
     resolve_sequence_spec,
 )
+from common.mask_utils import postprocess_mask
+from common.visualization import (
+    ensure_visualization_dirs,
+    render_before_after_comparison,
+    render_instance_mask_overlay,
+    render_mask_overlay,
+    save_visualization_frame,
+)
 try:
+    from part2_sota.mask_sam2 import SAM2MaskGenerator
+    from part2_sota.inpaint_pro_painter import ProPainterInpainter
+except ModuleNotFoundError as exc:
+    if exc.name != "part2_sota":
+        raise
     from mask_sam2 import SAM2MaskGenerator
     from inpaint_pro_painter import ProPainterInpainter
-except ModuleNotFoundError:
-    from src.part2_sota.mask_sam2 import SAM2MaskGenerator
-    from src.part2_sota.inpaint_pro_painter import ProPainterInpainter
 
 
 def parse_args():
@@ -91,41 +109,154 @@ def list_image_files(image_dir):
     )
 
 
+def normalize_sam2_mask(mask):
+    if mask is None:
+        return None
+    if mask.ndim == 3 and mask.shape[0] == 1:
+        mask = mask.squeeze(0)
+    if mask.ndim != 2:
+        return None
+    return (mask > 0).astype(np.uint8) * 255
+
+
 def save_object_masks(video_segments, output_dir):
     os.makedirs(output_dir, exist_ok=True)
+    for filename in os.listdir(output_dir):
+        if filename.lower().endswith((".png", ".jpg", ".jpeg")):
+            os.remove(os.path.join(output_dir, filename))
     for frame_idx, masks in video_segments.items():
         for obj_id, mask in masks.items():
             mask_path = os.path.join(output_dir, f"frame_{frame_idx:04d}_obj{obj_id}.png")
-            # Handle SAM2 output format: (1, H, W) -> (H, W)
-            if mask.ndim == 3 and mask.shape[0] == 1:
-                mask = mask.squeeze(0)  # Remove batch dimension
-            if mask.ndim == 2:
-                mask_img = (mask.astype(np.uint8) * 255)
+            mask_img = normalize_sam2_mask(mask)
+            if mask_img is not None:
                 Image.fromarray(mask_img).save(mask_path)
             else:
                 print(f"Warning: Unexpected mask shape {mask.shape} for frame {frame_idx}, obj {obj_id}")
 
 
-def save_combined_masks(video_segments, frame_files, output_dir):
-    os.makedirs(output_dir, exist_ok=True)
-    zero_mask = None
+def build_processed_masks(video_segments, frame_files, postprocess_cfg):
+    processed_masks = []
+    object_masks_per_frame = []
+    max_history = max(int(postprocess_cfg.get("temporal_window", 1)) - 1, 0)
+    mask_history = []
+
     for idx, frame_path in enumerate(frame_files):
-        if zero_mask is None:
-            if idx in video_segments and video_segments[idx]:
-                first_mask = next(iter(video_segments[idx].values()))
-                if first_mask.ndim == 3 and first_mask.shape[0] == 1:
-                    first_mask = first_mask.squeeze(0)
-                zero_mask = np.zeros_like(first_mask, dtype=np.uint8)
-            else:
-                zero_mask = np.zeros((240, 432), dtype=np.uint8)  # Based on debug output
-        combined_mask = np.zeros_like(zero_mask, dtype=np.uint8)
-        if idx in video_segments:
-            for mask in video_segments[idx].values():
-                if mask.ndim == 3 and mask.shape[0] == 1:
-                    mask = mask.squeeze(0)
-                combined_mask = np.maximum(combined_mask, (mask.astype(np.uint8) * 255))
-        output_name = os.path.basename(frame_path)
+        frame = cv2.imread(frame_path)
+        if frame is None:
+            raise ValueError(f"Failed to load frame for postprocessing: {frame_path}")
+
+        combined_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+        frame_object_masks = []
+        for obj_id, mask in sorted(video_segments.get(idx, {}).items()):
+            normalized_mask = normalize_sam2_mask(mask)
+            if normalized_mask is None:
+                print(f"Warning: Skipping malformed mask for frame {idx}, obj {obj_id}")
+                continue
+            if normalized_mask.shape != combined_mask.shape:
+                normalized_mask = cv2.resize(
+                    normalized_mask,
+                    (frame.shape[1], frame.shape[0]),
+                    interpolation=cv2.INTER_NEAREST,
+                )
+            frame_object_masks.append((obj_id, normalized_mask))
+            combined_mask = np.maximum(combined_mask, normalized_mask)
+
+        processed_mask = postprocess_mask(
+            combined_mask,
+            postprocess_cfg=postprocess_cfg,
+            previous_masks=mask_history,
+        )
+        if processed_mask is None:
+            processed_mask = combined_mask
+
+        processed_masks.append(processed_mask)
+        object_masks_per_frame.append(frame_object_masks)
+        if max_history > 0:
+            mask_history.append(processed_mask)
+            mask_history = mask_history[-max_history:]
+
+    return object_masks_per_frame, processed_masks
+
+
+def save_combined_masks(processed_masks, frame_files, output_dir):
+    os.makedirs(output_dir, exist_ok=True)
+    for filename in os.listdir(output_dir):
+        if filename.lower().endswith((".png", ".jpg", ".jpeg")):
+            os.remove(os.path.join(output_dir, filename))
+    for idx, frame_path in enumerate(frame_files):
+        combined_mask = processed_masks[idx]
+        output_name = f"{Path(frame_path).stem}.png"
         Image.fromarray(combined_mask).save(os.path.join(output_dir, output_name))
+
+
+def export_visualizations(
+    frame_files,
+    object_masks_per_frame,
+    processed_masks,
+    restored_frames,
+    visualization_root,
+    sequence_name,
+    common_cfg,
+    visualization_cfg,
+):
+    if not visualization_cfg.get("enabled", False):
+        return
+
+    visualization_dirs = ensure_visualization_dirs(visualization_root, sequence_name)
+    overlay_alpha = visualization_cfg.get("overlay_alpha", 0.35)
+    mask_overlay_frames = []
+    original_frames = []
+
+    for index, frame_path in enumerate(frame_files):
+        frame = cv2.imread(frame_path)
+        if frame is None:
+            raise ValueError(f"Failed to load frame for visualization: {frame_path}")
+        original_frames.append(frame)
+
+        object_masks = [mask for _, mask in object_masks_per_frame[index]]
+        object_labels = [f"obj={obj_id}" for obj_id, _ in object_masks_per_frame[index]]
+        if visualization_cfg.get("save_object_overlays", True):
+            object_overlay_frame = render_instance_mask_overlay(
+                frame,
+                object_masks,
+                instance_labels=object_labels,
+                overlay_alpha=overlay_alpha,
+                title="SAM2 objects",
+            )
+            object_output_path = os.path.join(
+                visualization_dirs["motion_scores"],
+                build_frame_filename(common_cfg, index, artifact="frame"),
+            )
+            save_visualization_frame(object_overlay_frame, object_output_path)
+
+        mask_overlay_frame = render_mask_overlay(
+            frame,
+            processed_masks[index],
+            overlay_alpha=overlay_alpha,
+        )
+        mask_overlay_frames.append(mask_overlay_frame)
+        if visualization_cfg.get("save_mask_overlays", True):
+            mask_output_path = os.path.join(
+                visualization_dirs["mask_overlays"],
+                build_frame_filename(common_cfg, index, artifact="frame"),
+            )
+            save_visualization_frame(mask_overlay_frame, mask_output_path)
+
+    if visualization_cfg.get("save_comparisons", True):
+        for index, restored_frame in enumerate(restored_frames):
+            restored_bgr = cv2.cvtColor(restored_frame, cv2.COLOR_RGB2BGR)
+            comparison_frame = render_before_after_comparison(
+                original_frames[index],
+                mask_overlay_frames[index],
+                restored_bgr,
+            )
+            comparison_output_path = os.path.join(
+                visualization_dirs["comparisons"],
+                build_frame_filename(common_cfg, index, artifact="frame"),
+            )
+            save_visualization_frame(comparison_frame, comparison_output_path)
+
+    print(f"Saved visualizations under {visualization_dirs['base']}")
 
 
 def main():
@@ -139,6 +270,9 @@ def main():
         common_cfg.get("project", {}).get("default_sequence", "bmx-trees"),
     )
     sequence_spec = resolve_sequence_spec(args.sequence or default_sequence, common_cfg)
+    pipeline_cfg = phase_cfg.get("pipeline", {})
+    postprocess_cfg = pipeline_cfg.get("postprocess", {})
+    visualization_cfg = pipeline_cfg.get("visualization", {})
 
     sam2_weights = phase_cfg.get("models", {}).get("segmentation", {}).get("weights_dir", "models/sam2")
     propainter_weights = phase_cfg.get("models", {}).get("inpainting", {}).get("weights_dir", "models/ProPainter")
@@ -244,7 +378,7 @@ def main():
     print("Generating SAM2 masks...")
     video_segments = mask_generator.generate(input_frames_dir, prompts)
 
-    masks_dir = phase_cfg.get("phase", {}).get("outputs", {}).get("masks_dir", "results/masks/part2")
+    masks_dir = get_phase_output_dir(phase_cfg, "masks_dir") or "results/masks/part2"
     sequence_masks_dir = os.path.join(masks_dir, sequence_spec["output_name"])
     object_masks_dir = os.path.join(sequence_masks_dir, "objects")
     combined_masks_dir = os.path.join(sequence_masks_dir, "combined")
@@ -252,15 +386,32 @@ def main():
     os.makedirs(object_masks_dir, exist_ok=True)
     save_object_masks(video_segments, object_masks_dir)
 
-    frame_files = list_image_files(input_frames_dir)
-    save_combined_masks(video_segments, frame_files, combined_masks_dir)
+    frame_files = collect_image_paths(input_frames_dir, common_cfg) or list_image_files(input_frames_dir)
+    object_masks_per_frame, processed_masks = build_processed_masks(
+                video_segments,
+                frame_files,
+                postprocess_cfg,
+        )
+    save_combined_masks(processed_masks, frame_files, combined_masks_dir)
 
-    output_video_dir = phase_cfg.get("phase", {}).get("outputs", {}).get("videos_dir", "results/videos/part2")
+    output_video_dir = get_phase_output_dir(phase_cfg, "videos_dir") or "results/videos/part2"
     os.makedirs(output_video_dir, exist_ok=True)
     output_video_path = os.path.join(output_video_dir, f"{sequence_spec['output_name']}_inpainted.mp4")
 
     print("Inpainting with ProPainter...")
-    inpainter.inpaint(input_frames_dir, combined_masks_dir, output_video_path)
+    restored_frames = inpainter.inpaint(input_frames_dir, combined_masks_dir, output_video_path)
+
+    visualization_root = get_phase_output_dir(phase_cfg, "visualizations_dir") or "results/visualizations/part2"
+    export_visualizations(
+        frame_files,
+        object_masks_per_frame,
+        processed_masks,
+        restored_frames,
+        visualization_root,
+        sequence_spec["output_name"],
+        common_cfg,
+        visualization_cfg,
+    )
 
     print("Part 2 pipeline finished.")
     print(f"Saved object masks to: {object_masks_dir}")

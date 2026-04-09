@@ -7,6 +7,14 @@ from common.mask_utils import normalize_binary_mask
 
 
 DEFAULT_FONT = cv2.FONT_HERSHEY_SIMPLEX
+DEFAULT_MASK_COLORS = [
+	(0, 200, 0),
+	(0, 180, 255),
+	(255, 180, 0),
+	(255, 80, 80),
+	(180, 0, 255),
+	(80, 255, 255),
+]
 
 
 def ensure_visualization_dirs(root_dir, sequence_name):
@@ -139,6 +147,29 @@ def render_motion_score_overlay(
 
 	output = _draw_label(output, "Motion scoring", (8, 24), (255, 255, 255))
 	return output
+
+
+def render_instance_mask_overlay(
+	frame,
+	instance_masks,
+	instance_labels=None,
+	overlay_alpha=0.35,
+	title="Tracked objects",
+):
+	output = frame.copy()
+	if not instance_masks:
+		output = _draw_label(output, "No tracked objects", (8, 52), (255, 255, 255))
+		return _draw_label(output, title, (8, 24), (255, 255, 255))
+
+	labels = instance_labels or []
+	for index, mask in enumerate(instance_masks):
+		color = DEFAULT_MASK_COLORS[index % len(DEFAULT_MASK_COLORS)]
+		label = labels[index] if index < len(labels) else f"obj={index + 1}"
+		output = _blend_mask(output, mask, color, overlay_alpha)
+		output = _draw_mask_contours(output, mask, color)
+		output = _draw_label(output, label, _mask_anchor(mask), color)
+
+	return _draw_label(output, title, (8, 24), (255, 255, 255))
 
 
 def render_mask_overlay(frame, mask, overlay_alpha=0.35, color=(255, 180, 0)):

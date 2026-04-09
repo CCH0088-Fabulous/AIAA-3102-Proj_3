@@ -66,6 +66,19 @@ class ProPainterInpainter:
         self.inpainter = InpaintGenerator(model_path=propainter_ckpt).to(self.device)
         self.inpainter.eval()
 
+    def _resolve_mask_path(self, masks_dir, frame_filename):
+        frame_stem = Path(frame_filename).stem
+        candidates = [
+            os.path.join(masks_dir, frame_filename),
+            os.path.join(masks_dir, f"{frame_stem}.png"),
+            os.path.join(masks_dir, f"{frame_stem}.jpg"),
+            os.path.join(masks_dir, f"{frame_stem}.jpeg"),
+        ]
+        for candidate in candidates:
+            if os.path.exists(candidate):
+                return candidate
+        return None
+
     def inpaint(self, frames_dir, masks_dir, output_video_path=None, fps=24):
         """
         Inpaint video frames using masks.
@@ -89,8 +102,8 @@ class ProPainterInpainter:
         # Load masks
         masks = []
         for f in frame_files:
-            mask_path = os.path.join(masks_dir, f)
-            if os.path.exists(mask_path):
+            mask_path = self._resolve_mask_path(masks_dir, f)
+            if mask_path:
                 mask = Image.open(mask_path).convert('L')
                 masks.append(np.array(mask) / 255.0)  # Normalize to 0-1
             else:
@@ -174,6 +187,5 @@ class ProPainterInpainter:
 
         if output_video_path:
             imageio.mimwrite(output_video_path, comp_frames_resized, fps=fps)
-            return None
-        else:
-            return comp_frames_resized
+
+        return comp_frames_resized

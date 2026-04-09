@@ -1,6 +1,6 @@
 # Video Object Removal and Inpainting
 
-This repository implements a staged video object removal project. The current completed work is Part 1, a classical baseline pipeline built around YOLOv8-Seg, sparse optical flow, temporal background propagation, and traditional image inpainting.
+This repository implements a staged video object removal project. The currently implemented pipelines cover Part 1 as a classical baseline built around YOLOv8-Seg, sparse optical flow, temporal background propagation, and traditional image inpainting, plus Part 2 as a higher-quality SOTA pipeline built around SAM2 mask propagation and ProPainter video inpainting.
 
 Part 1 is no longer just a mask extraction demo. It now runs a full baseline pipeline:
 
@@ -14,7 +14,7 @@ Part 1 is no longer just a mask extraction demo. It now runs a full baseline pip
 ## Current Status
 
 - Part 1 baseline: implemented and validated.
-- Part 2 SOTA pipeline: interface scaffold only.
+- Part 2 SOTA pipeline: implemented; requires SAM2 and ProPainter assets under `models/sam2` and `models/ProPainter`.
 - Part 3 exploration pipeline: interface scaffold only.
 
 ## Environment
@@ -33,6 +33,15 @@ models/yolo_v8_seg/yolov8x-seg.pt
 ```
 
 If the weight file is missing, place the YOLOv8 segmentation checkpoint at that location or update [configs/part1_baseline.yaml](configs/part1_baseline.yaml).
+
+Expected Part 2 model roots:
+
+```text
+models/sam2
+models/ProPainter
+```
+
+The SAM2 repository should include checkpoints under `models/sam2/checkpoints/`. ProPainter weights are downloaded into `models/ProPainter/weights/` on first use.
 
 ## Dataset Keys
 
@@ -309,10 +318,10 @@ PSNR and SSIM currently default to background-only evaluation when no clean rest
 
 ## Next Stages
 
-Part 2 and Part 3 entrypoints already exist, but only Part 1 is fully implemented at this stage. The next major milestones are:
+Part 1 and Part 2 are now available in the repository. The next major milestones are:
 
-- higher-quality SOTA mask generation and inpainting for Part 2
 - exploration and failure-case improvements for Part 3
+- robustness improvements for Part 2 configuration, prompts, and model setup
 - report-oriented summary tables and final packaging scripts
 
 ## Part 2 Progress
@@ -320,8 +329,10 @@ Part 2 and Part 3 entrypoints already exist, but only Part 1 is fully implemente
 Part 2 is now implemented beyond the initial interface scaffold. The current Part 2 workflow includes:
 
 - SAM2-based mask generation via sequence-specific `box`/`points` prompts in [configs/part2_sota.yaml](configs/part2_sota.yaml)
+- lightweight mask postprocessing for hole filling and small-component cleanup before inpainting
 - ProPainter video inpainting to produce coherent restored output
 - saved mask outputs separated into `objects/` and `combined/` for multi-object scenes
+- visualization exports under `results/visualizations/part2/<sequence>/` with tracked-object overlays, final mask overlays, and original/mask/restored comparisons
 - metrics evaluation updated to save results under `results/metrics/part2/<sequence>/`
 
 Current Part 2 outputs follow this structure:
@@ -329,6 +340,9 @@ Current Part 2 outputs follow this structure:
 - `results/masks/part2/<sequence>/objects/`
 - `results/masks/part2/<sequence>/combined/`
 - `results/videos/part2/<sequence>_inpainted.mp4`
+- `results/visualizations/part2/<sequence>/motion_scores/`
+- `results/visualizations/part2/<sequence>/mask_overlays/`
+- `results/visualizations/part2/<sequence>/comparisons/`
 - `results/metrics/part2/<sequence>/iou_results.csv`
 - `results/metrics/part2/<sequence>/psnr_ssim.csv`
 
@@ -338,10 +352,11 @@ The evaluator now uses the `combined/` masks by default for overall foreground I
 
 ### 1. Standard Part 2 Run
 
+Run the full Part 2 pipeline on the default sequence from [configs/part2_sota.yaml](configs/part2_sota.yaml):
+
 ```bash
 conda activate project3
 python src/part2_sota/pipeline_part2.py \
-	--sequence datasets \
 	--common-config configs/common.yaml \
 	--phase-config configs/part2_sota.yaml
 ```
@@ -366,11 +381,12 @@ python src/part2_sota/pipeline_part2.py \
 
 ### 2. Evaluate Part 2 Results
 
+Evaluate the default sequence from [configs/part2_sota.yaml](configs/part2_sota.yaml):
+
 ```bash
 conda activate project3
 python scripts/evaluate_metrics.py \
-	--phase-config configs/part2_sota.yaml \
-	--sequence datasets 
+	--phase-config configs/part2_sota.yaml
 ```
 
 ### Example: Evaluate Part 2 on a Specific Sequence
