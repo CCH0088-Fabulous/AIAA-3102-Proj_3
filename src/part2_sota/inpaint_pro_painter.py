@@ -37,6 +37,25 @@ class ProPainterInpainter:
         self.inpainter = None
         self._load_models()
 
+    def _compute_process_size(self, height, width, video_length):
+        """Choose a memory-friendly processing size while preserving aspect ratio."""
+        max_side = max(height, width)
+        # Long videos consume a lot of VRAM in RAFT flow estimation.
+        if video_length >= 120:
+            target_max_side = 320
+        elif video_length >= 80:
+            target_max_side = 384
+        else:
+            target_max_side = 512
+
+        if max_side <= target_max_side:
+            return height, width
+
+        scale = target_max_side / float(max_side)
+        resized_h = max(32, int(round(height * scale / 8.0) * 8))
+        resized_w = max(32, int(round(width * scale / 8.0) * 8))
+        return resized_h, resized_w
+
     def _load_models(self):
         """Load ProPainter models lazily to avoid import-time cv2/torch conflicts."""
         from model.modules.flow_comp_raft import RAFT_bi
@@ -113,15 +132,24 @@ class ProPainterInpainter:
 
         # Get original size
         h, w = frames[0].height, frames[0].width
-        process_size = (h, w)  # Original size (height, width) for PyTorch
+        process_h, process_w = self._compute_process_size(h, w, len(frames))
+        process_size = (process_h, process_w)
 
-        # Keep frames as is (PIL Images)
-        resized_frames = frames
+        # Resize frames/masks for memory-efficient inpainting, then upscale outputs back.
+        if (process_h, process_w) != (h, w):
+            resized_frames = [img.resize((process_w, process_h), Image.BILINEAR) for img in frames]
+            resized_masks = [
+                cv2.resize(mask.astype(np.float32), (process_w, process_h), interpolation=cv2.INTER_NEAREST)
+                for mask in masks
+            ]
+        else:
+            resized_frames = frames
+            resized_masks = masks
 
         # Dilate masks
         kernel = np.ones((4, 4), np.uint8)
-        masks_dilated = [cv2.dilate((m > 0).astype(np.uint8), kernel) for m in masks]
-        flow_masks = [cv2.dilate((m > 0).astype(np.uint8), kernel) for m in masks]
+        masks_dilated = [cv2.dilate((m > 0).astype(np.uint8), kernel) for m in resized_masks]
+        flow_masks = [cv2.dilate((m > 0).astype(np.uint8), kernel) for m in resized_masks]
 
         # Convert masks to PIL Images for to_tensors()
         masks_dilated_pil = [Image.fromarray((m * 255).astype(np.uint8), mode='L') for m in masks_dilated]

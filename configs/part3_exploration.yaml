@@ -11,6 +11,13 @@ models:
   segmentation_upgrade:
     backend: "sam3"
     weights_dir: "models/sam3"
+    checkpoint_dir: "models/sam3/checkpoints"
+    checkpoint_name: "sam3.pt"
+    repo_id: "facebook/sam3"
+    auto_download: true
+  inpainting:
+    backend: "propainter"
+    weights_dir: "models/ProPainter"
   refinement:
     backend: "controlnet-inpaint"
     weights_dir: "models/controlnet"
@@ -19,7 +26,35 @@ pipeline:
   input:
     sequence_key: "bmx-trees"
   baseline_phase: "part2"
+  baseline_mask_source: "auto"
+  baseline_masks_subdir: "combined"
+  baseline_objects_subdir: "objects"
   exploration_track: "sam3_refinement"
+  refinement:
+    confidence_threshold: 0.35
+    box_expand_ratio: 0.08
+    min_mask_area: 32
+    min_selection_iou: 0.95
+    min_area_ratio: 0.95
+    max_area_ratio: 1.05
+    min_candidate_precision: 0.95
+    min_coarse_recall: 0.95
+    fallback_to_coarse: true
+  postprocess:
+    skip_for_objects_union: true
+    dilate_kernel_size: 0
+    dilate_iterations: 1
+    fill_holes: true
+    min_component_area: 16
+    temporal_window: 1
+  inpainting:
+    backend: "propainter"
+  visualization:
+    enabled: true
+    overlay_alpha: 0.35
+    save_object_overlays: true
+    save_mask_overlays: true
+    save_comparisons: true
   export:
     save_masks: true
     save_video: true
