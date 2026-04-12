@@ -341,10 +341,43 @@ def main():
     object_masks_dir = os.path.join(sequence_masks_dir, "objects")
     combined_masks_dir = os.path.join(sequence_masks_dir, "combined")
 
+    try:
+        from part3_exploration.diffusion_controlnet import ControlNetInpainter
+    except ModuleNotFoundError:
+        try:
+            from diffusion_controlnet import ControlNetInpainter
+        except ModuleNotFoundError:
+            pass
+
+    inpainting_cfg = phase_cfg.get("models", {}).get("inpainting", {})
+    diffusion_cfg = phase_cfg.get("models", {}).get("refinement", {})
+
     if pipeline_cfg.get("export", {}).get("save_masks", True):
         save_candidate_masks(candidate_masks_per_frame, object_masks_dir)
         save_combined_masks(processed_masks, frame_files, combined_masks_dir)
 
+    # ---------------------------------------------------------
+    # Direction C: Generative Inpainting for Keyframes 
+    # ---------------------------------------------------------
+    # We load the frames to pass to SD
+    frames_rgb = [read_image(f, mode="RGB") for f in frame_files]
+    mid_idx = len(frames_rgb) // 2
+    keyframe_indices = [0, mid_idx] if len(frames_rgb) > 1 else [0]
+    
+    print("\n--- Running SD Inpainting on Keyframes ---")
+    sd_inpainter = ControlNetInpainter(weights_dir=diffusion_cfg.get("weights_dir", "models/stable-diffusion-inpainting"))
+    generated_keyframes = sd_inpainter.inpaint(frames_rgb, processed_masks, keyframe_indices=keyframe_indices)
+    
+    # Save generated keyframes to results/masks/part3/keyframes
+    keyframes_dir = os.path.join(sequence_masks_dir, "keyframes")
+    os.makedirs(keyframes_dir, exist_ok=True)
+    for idx, generated_img in generated_keyframes.items():
+        out_path = os.path.join(keyframes_dir, f"frame_{idx:04d}_sd_inpainted.png")
+        Image.fromarray(generated_img).save(out_path)
+        print(f"Saved SD inpainted keyframe to {out_path}")
+    print("------------------------------------------\n")
+    
+    # Pass to ProPainter
     inpainter = ProPainterInpainter(inpainting_cfg.get("weights_dir", "models/ProPainter"))
     output_video_dir = get_phase_output_dir(phase_cfg, "videos_dir") or "results/videos/part3"
     os.makedirs(output_video_dir, exist_ok=True)

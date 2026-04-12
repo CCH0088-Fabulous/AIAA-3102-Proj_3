@@ -2,7 +2,7 @@ import os
 
 import cv2
 import numpy as np
-
+import imageio
 
 def get_sequence_name(sequence_dir):
     return os.path.basename(os.path.normpath(sequence_dir))
@@ -36,16 +36,13 @@ def write_video(frames, output_path, fps=30, codec="mp4v"):
         raise ValueError("Cannot write a video without frames.")
 
     height, width = frames[0].shape[:2]
-    fourcc = cv2.VideoWriter_fourcc(*codec)
-    writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-
-    if not writer.isOpened():
-        raise RuntimeError(f"Failed to open video writer for output path: {output_path}")
-
-    try:
-        for frame in frames:
-            if frame.shape[:2] != (height, width):
-                frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_LINEAR)
-            writer.write(frame)
-    finally:
-        writer.release()
+    
+    rgb_frames = []
+    for frame in frames:
+        if frame.shape[:2] != (height, width):
+            # width is dsize[0], height is dsize[1]
+            frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_LINEAR)
+        rgb_frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    
+    # imageio uses ffmpeg natively to write compliant standard mp4 files
+    imageio.mimwrite(output_path, rgb_frames, fps=fps, macro_block_size=None)
