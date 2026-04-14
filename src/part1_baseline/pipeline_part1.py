@@ -163,6 +163,7 @@ def main():
         motion_summaries_per_frame.append(motion_summaries)
 
         merged_mask = merge_instance_masks(dynamic_masks, frame.shape)
+        raw_merged_mask = merged_mask.copy() if merged_mask is not None else None
         merged_mask = postprocess_mask(
             merged_mask,
             postprocess_cfg=postprocess_cfg,
@@ -211,8 +212,8 @@ def main():
             f"motion-validated: {tracked_instances}"
         )
 
-        if merged_mask is not None:
-            mask_history.append(merged_mask)
+        if raw_merged_mask is not None:
+            mask_history.append(raw_merged_mask)
         previous_frame = frame
 
     if not frames:

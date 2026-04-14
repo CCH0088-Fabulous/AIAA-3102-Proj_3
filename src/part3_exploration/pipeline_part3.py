@@ -377,7 +377,34 @@ def main():
         print(f"Saved SD inpainted keyframe to {out_path}")
     print("------------------------------------------\n")
     
-    # Pass to ProPainter
+    # ---------------------------------------------------------
+    # Temporal Consistency Engine: Blend SD keyframes for ProPainter
+    # ---------------------------------------------------------
+    # Create directories for blended frames and zeroed masks
+    blend_frames_dir = os.path.join(sequence_masks_dir, "sd_blend_frames")
+    blend_masks_dir = os.path.join(sequence_masks_dir, "sd_blend_masks")
+    os.makedirs(blend_frames_dir, exist_ok=True)
+    os.makedirs(blend_masks_dir, exist_ok=True)
+    
+    print("Preparing Temporal Consistency Engine (SD -> ProPainter)...")
+    for idx, (frame_img, mask_img) in enumerate(zip(frames_rgb, processed_masks)):
+        out_name = f"{Path(frame_files[idx]).stem}.png"
+        
+        # If this is a keyframe, use the fully generated background and set mask to 0
+        if idx in generated_keyframes:
+            final_frame = generated_keyframes[idx]
+            # Ensure the generated frame is the same size as original frame to prevent ProPainter crash
+            if final_frame.shape != frame_img.shape:
+                final_frame = cv2.resize(final_frame, (frame_img.shape[1], frame_img.shape[0]))
+            final_mask = np.zeros_like(mask_img)  # Zero mask = nothing to inpaint = valid background
+        else:
+            final_frame = frame_img
+            final_mask = mask_img
+            
+        Image.fromarray(final_frame).save(os.path.join(blend_frames_dir, out_name))
+        Image.fromarray(final_mask).save(os.path.join(blend_masks_dir, out_name))
+
+    # Pass the blended sequence to ProPainter
     inpainter = ProPainterInpainter(inpainting_cfg.get("weights_dir", "models/ProPainter"))
     output_video_dir = get_phase_output_dir(phase_cfg, "videos_dir") or "results/videos/part3"
     os.makedirs(output_video_dir, exist_ok=True)
@@ -386,8 +413,8 @@ def main():
         build_video_filename(common_cfg, sequence_spec["output_name"], phase_cfg.get("phase", {}).get("slug", "part3")),
     )
 
-    print("Inpainting with ProPainter...")
-    restored_frames = inpainter.inpaint(input_frames_dir, combined_masks_dir, output_video_path)
+    print("Inpainting with ProPainter using SD keyframe priors...")
+    restored_frames = inpainter.inpaint(blend_frames_dir, blend_masks_dir, output_video_path)
 
     visualization_root = get_phase_output_dir(phase_cfg, "visualizations_dir") or "results/visualizations/part3"
     export_visualizations(
