@@ -357,24 +357,45 @@ def main():
         save_combined_masks(processed_masks, frame_files, combined_masks_dir)
 
     # ---------------------------------------------------------
-    # Direction C: Generative Inpainting for Keyframes 
+    # Direction C: Generative Inpainting (Selective SD Injection)
     # ---------------------------------------------------------
-    # We load the frames to pass to SD
+    print("\n--- Identifying Permanent Occlusions for Selective SD Injection ---")
     frames_rgb = [read_image(f, mode="RGB") for f in frame_files]
-    mid_idx = len(frames_rgb) // 2
-    keyframe_indices = [0, mid_idx] if len(frames_rgb) > 1 else [0]
     
-    print("\n--- Running SD Inpainting on Keyframes ---")
-    sd_inpainter = ControlNetInpainter(weights_dir=diffusion_cfg.get("weights_dir", "models/stable-diffusion-inpainting"))
-    generated_keyframes = sd_inpainter.inpaint(frames_rgb, processed_masks, keyframe_indices=keyframe_indices)
+    # Calculate globally occluded pixels (masked in > 95% of frames)
+    accumulated_mask = np.zeros_like(processed_masks[0], dtype=np.float32)
+    for m in processed_masks:
+        accumulated_mask += (m > 0).astype(np.float32)
     
-    # Save generated keyframes to results/masks/part3/keyframes
-    keyframes_dir = os.path.join(sequence_masks_dir, "keyframes")
-    os.makedirs(keyframes_dir, exist_ok=True)
-    for idx, generated_img in generated_keyframes.items():
-        out_path = os.path.join(keyframes_dir, f"frame_{idx:04d}_sd_inpainted.png")
-        Image.fromarray(generated_img).save(out_path)
-        print(f"Saved SD inpainted keyframe to {out_path}")
+    always_masked_thresh = len(processed_masks) * 0.95
+    always_masked = (accumulated_mask >= always_masked_thresh).astype(np.uint8) * 255
+    
+    occlusion_ratio = np.sum(always_masked > 0) / always_masked.size
+    print(f"Permanent absolute occlusion ratio: {occlusion_ratio:.4f}")
+    
+    generated_keyframes = {}
+    if occlusion_ratio > 0.005:  # >0.5% screen space permanently occluded
+        print(f"Significant absolute occlusion detected! Activating SD Inpainting as fallback generative prior...")
+        
+        # Pick the middle frame to inpaint the static background hole
+        mid_idx = len(frames_rgb) // 2
+        keyframe_indices = [mid_idx]
+        
+        # Override the mask specifically for the generative model, only inpaint the permanent hole
+        sd_inpainter = ControlNetInpainter(weights_dir=diffusion_cfg.get("weights_dir", "models/stable-diffusion-inpainting"))
+        custom_masks = [always_masked if i in keyframe_indices else processed_masks[i] for i in range(len(frames_rgb))]
+        
+        generated_keyframes = sd_inpainter.inpaint(frames_rgb, custom_masks, keyframe_indices=keyframe_indices)
+        
+        keyframes_dir = os.path.join(sequence_masks_dir, "keyframes")
+        os.makedirs(keyframes_dir, exist_ok=True)
+        for idx, generated_img in generated_keyframes.items():
+            out_path = os.path.join(keyframes_dir, f"frame_{idx:04d}_sd_inpainted.png")
+            Image.fromarray(generated_img).save(out_path)
+            print(f"Saved SD inpainted keyframe to {out_path}")
+    else:
+        print("No significant permanent occlusion found. Skipping SD Generative prior to preserve PSNR/SSIM.")
+
     print("------------------------------------------\n")
     
     # ---------------------------------------------------------
@@ -390,13 +411,17 @@ def main():
     for idx, (frame_img, mask_img) in enumerate(zip(frames_rgb, processed_masks)):
         out_name = f"{Path(frame_files[idx]).stem}.png"
         
-        # If this is a keyframe, use the fully generated background and set mask to 0
+        # If this is a keyframe, use the fully generated background
         if idx in generated_keyframes:
             final_frame = generated_keyframes[idx]
             # Ensure the generated frame is the same size as original frame to prevent ProPainter crash
             if final_frame.shape != frame_img.shape:
                 final_frame = cv2.resize(final_frame, (frame_img.shape[1], frame_img.shape[0]))
-            final_mask = np.zeros_like(mask_img)  # Zero mask = nothing to inpaint = valid background
+                
+            # The permanent hole has been filled by SD! 
+            # We remove the permanent hole from ProPainter's mask so it considers it Ground Truth Context
+            final_mask = mask_img.copy()
+            final_mask[always_masked > 0] = 0
         else:
             final_frame = frame_img
             final_mask = mask_img
