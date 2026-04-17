@@ -15,6 +15,7 @@ try:
         plot_sequence_trends,
         plot_summary_heatmaps,
         plot_summary_table,
+        plot_wild_video_frames_comparison,
         set_plot_style,
     )
 except ImportError:
@@ -31,6 +32,7 @@ except ImportError:
         plot_sequence_trends,
         plot_summary_heatmaps,
         plot_summary_table,
+        plot_wild_video_frames_comparison,
         set_plot_style,
     )
 
@@ -51,6 +53,10 @@ def parse_args():
     return parser.parse_args()
 
 
+def subset_by_sequences(dataframe, sequence_names):
+    return dataframe[dataframe["sequence"].astype(str).isin(sequence_names)].copy()
+
+
 def main():
     args = parse_args()
     metrics_root = Path(args.metrics_root).resolve()
@@ -62,20 +68,34 @@ def main():
     iou_df, quality_df = load_metric_data(metrics_root)
     summary_df = compute_summaries(iou_df, quality_df)
     deltas_df, paired_summary_df = compute_paired_deltas(iou_df, quality_df)
+    base_sequences = ["bmx-trees", "tennis"]
+    base_iou_df = subset_by_sequences(iou_df, base_sequences)
+    base_quality_df = subset_by_sequences(quality_df, base_sequences)
+    base_summary_df = subset_by_sequences(summary_df, base_sequences)
+    base_deltas_df = subset_by_sequences(deltas_df, base_sequences)
+    base_paired_summary_df = subset_by_sequences(paired_summary_df, base_sequences)
 
-    plot_iou_distribution(iou_df, summary_df, output_dir)
-    plot_quality_distribution(quality_df, summary_df, output_dir)
+    plot_iou_distribution(base_iou_df, base_summary_df, output_dir, stem="01_iou_distribution")
+    plot_iou_distribution(iou_df, summary_df, output_dir, stem="01_iou_distribution1")
+    plot_quality_distribution(base_quality_df, base_summary_df, output_dir, stem="02_quality_distribution")
+    plot_quality_distribution(quality_df, summary_df, output_dir, stem="02_quality_distribution1")
 
-    for sequence in iou_df["sequence"].cat.categories:
+    for sequence in [sequence for sequence in iou_df["sequence"].cat.categories if (iou_df["sequence"] == sequence).any()]:
         plot_sequence_trends(iou_df, quality_df, output_dir, sequence)
         plot_paired_deltas(deltas_df, output_dir, sequence)
 
-    plot_iou_ecdf(iou_df, output_dir)
-    plot_iou_vs_union(iou_df, output_dir)
+    plot_iou_ecdf(base_iou_df, output_dir, stem="07_iou_ecdf")
+    plot_iou_ecdf(iou_df, output_dir, stem="07_iou_ecdf1")
+    plot_iou_vs_union(base_iou_df, output_dir, stem="08_iou_vs_union")
+    plot_iou_vs_union(iou_df, output_dir, stem="08_iou_vs_union1")
     plot_quality_vs_valid_pixels(quality_df, output_dir)
-    plot_summary_heatmaps(summary_df, output_dir)
-    plot_summary_table(summary_df, output_dir)
-    plot_paired_delta_summary_table(paired_summary_df, output_dir)
+    plot_summary_heatmaps(base_summary_df, output_dir, stem="10_metric_summary_heatmaps")
+    plot_summary_heatmaps(summary_df, output_dir, stem="10_metric_summary_heatmaps1")
+    plot_summary_table(base_summary_df, output_dir, stem="11_metric_summary_table")
+    plot_summary_table(summary_df, output_dir, stem="11_metric_summary_table1")
+    plot_paired_delta_summary_table(base_paired_summary_df, output_dir, stem="12_paired_delta_summary_table")
+    plot_paired_delta_summary_table(paired_summary_df, output_dir, stem="12_paired_delta_summary_table1")
+    plot_wild_video_frames_comparison(output_dir)
 
     write_summary_csvs(summary_df, paired_summary_df, output_dir)
     write_manifest(output_dir)

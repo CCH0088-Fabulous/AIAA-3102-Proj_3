@@ -1,8 +1,13 @@
+from pathlib import Path
+
+import cv2
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+
+PROXY_IOU_NOTE = "Wild Video uses a phase-consensus proxy IoU because ground-truth masks are unavailable."
 
 try:
     from .metric_figure_constants import (
@@ -93,6 +98,16 @@ def add_jitter_points(ax, grouped_values, colors, rng):
         )
 
 
+def _present_sequences(dataframe):
+    if hasattr(dataframe["sequence"], "cat"):
+        return [sequence for sequence in dataframe["sequence"].cat.categories if (dataframe["sequence"] == sequence).any()]
+    return list(pd.unique(dataframe["sequence"]))
+
+
+def _contains_wild_sequence(dataframe):
+    return any(str(sequence) == "wild_video_frames" for sequence in _present_sequences(dataframe))
+
+
 def draw_distribution_panel(ax, subset, summary_subset, y_col, y_label, title, rng, y_limits=None):
     palette = [PHASE_COLORS[phase] for phase in PHASE_ORDER]
     sns.violinplot(
@@ -157,8 +172,8 @@ def draw_distribution_panel(ax, subset, summary_subset, y_col, y_label, title, r
     apply_common_axis_style(ax)
 
 
-def plot_iou_distribution(iou_df, summary_df, output_dir):
-    sequences = list(iou_df["sequence"].cat.categories)
+def plot_iou_distribution(iou_df, summary_df, output_dir, stem="01_iou_distribution"):
+    sequences = _present_sequences(iou_df)
     rng = np.random.default_rng(42)
     fig, axes = plt.subplots(1, len(sequences), figsize=(7.2 * len(sequences), 6.4), sharey=True)
     if len(sequences) == 1:
@@ -177,13 +192,16 @@ def plot_iou_distribution(iou_df, summary_df, output_dir):
             y_limits=(0.0, 1.0),
         )
     fig.suptitle("Frame-Level IoU Distributions by Phase", fontsize=20, y=1.02)
-    fig.text(0.5, -0.02, "Violin density + box summary + frame-level jittered observations", ha="center", fontsize=12)
-    finalize_figure_layout(fig, top=0.84, bottom=0.16, wspace=0.14)
-    save_figure(fig, output_dir, "01_iou_distribution")
+    footer_lines = ["Violin density + box summary + frame-level jittered observations"]
+    if _contains_wild_sequence(iou_df):
+        footer_lines.append(PROXY_IOU_NOTE)
+    fig.text(0.5, 0.02, "\n".join(footer_lines), ha="center", fontsize=11.5)
+    finalize_figure_layout(fig, top=0.84, bottom=0.20 if _contains_wild_sequence(iou_df) else 0.16, wspace=0.14)
+    save_figure(fig, output_dir, stem)
 
 
-def plot_quality_distribution(quality_df, summary_df, output_dir):
-    sequences = list(quality_df["sequence"].cat.categories)
+def plot_quality_distribution(quality_df, summary_df, output_dir, stem="02_quality_distribution"):
+    sequences = _present_sequences(quality_df)
     rng = np.random.default_rng(7)
     fig, axes = plt.subplots(2, len(sequences), figsize=(7.0 * len(sequences), 10.5), sharex=False)
     for col, sequence in enumerate(sequences):
@@ -211,23 +229,31 @@ def plot_quality_distribution(quality_df, summary_df, output_dir):
     fig.suptitle("Frame-Level Quality Metric Distributions", fontsize=20, y=1.01)
     fig.text(
         0.5,
-        -0.02,
+        0.02,
         "All current PSNR/SSIM values use background_preservation mode, not full-reference restoration quality.",
         ha="center",
         fontsize=12,
     )
     finalize_figure_layout(fig, top=0.87, bottom=0.13, hspace=0.22, wspace=0.18)
-    save_figure(fig, output_dir, "02_quality_distribution")
+    save_figure(fig, output_dir, stem)
 
 
 def _framewise_stem(sequence):
-    sequence_slug = str(sequence).replace("-", "_")
-    return f"03_framewise_metrics_{sequence_slug}" if str(sequence) == "bmx-trees" else f"04_framewise_metrics_{sequence_slug}"
+    stems = {
+        "bmx-trees": "03_framewise_metrics_bmx_trees",
+        "tennis": "04_framewise_metrics_tennis",
+        "wild_video_frames": "14_framewise_metrics_wild_video",
+    }
+    return stems.get(str(sequence), f"framewise_metrics_{str(sequence).replace('-', '_')}")
 
 
 def _paired_delta_stem(sequence):
-    sequence_slug = str(sequence).replace("-", "_")
-    return f"05_paired_deltas_{sequence_slug}" if str(sequence) == "bmx-trees" else f"06_paired_deltas_{sequence_slug}"
+    stems = {
+        "bmx-trees": "05_paired_deltas_bmx_trees",
+        "tennis": "06_paired_deltas_tennis",
+        "wild_video_frames": "15_paired_deltas_wild_videos",
+    }
+    return stems.get(str(sequence), f"paired_deltas_{str(sequence).replace('-', '_')}")
 
 
 def plot_sequence_trends(iou_df, quality_df, output_dir, sequence):
@@ -268,7 +294,9 @@ def plot_sequence_trends(iou_df, quality_df, output_dir, sequence):
     axes[0].legend(loc="upper right", ncol=3, frameon=True, fontsize=11)
     axes[-1].set_xlabel("Frame Index")
     fig.suptitle(f"Frame-Wise Metric Trends: {sequence_label(sequence)}", fontsize=20, y=1.01)
-    finalize_figure_layout(fig, top=0.92, bottom=0.08, hspace=0.28)
+    if str(sequence) == "wild_video_frames":
+        fig.text(0.5, 0.02, PROXY_IOU_NOTE, ha="center", fontsize=11.5)
+    finalize_figure_layout(fig, top=0.92, bottom=0.12 if str(sequence) == "wild_video_frames" else 0.08, hspace=0.28)
     save_figure(fig, output_dir, _framewise_stem(sequence))
 
 
@@ -326,12 +354,113 @@ def plot_paired_deltas(deltas_df, output_dir, sequence):
             apply_common_axis_style(ax)
 
     fig.suptitle(f"Paired Frame-Level Improvements: {sequence_label(sequence)}", fontsize=20, y=1.01)
-    finalize_figure_layout(fig, top=0.91, bottom=0.08, hspace=0.30, wspace=0.22)
+    if str(sequence) == "wild_video_frames":
+        fig.text(0.5, 0.02, PROXY_IOU_NOTE, ha="center", fontsize=11.5)
+    finalize_figure_layout(
+        fig,
+        top=0.91,
+        bottom=0.12 if str(sequence) == "wild_video_frames" else 0.08,
+        hspace=0.30,
+        wspace=0.22,
+    )
     save_figure(fig, output_dir, _paired_delta_stem(sequence))
 
 
-def plot_iou_ecdf(iou_df, output_dir):
-    sequences = list(iou_df["sequence"].cat.categories)
+def _load_rgb_image(image_path):
+    frame = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    if frame is None:
+        raise FileNotFoundError(f"Unable to read image frame: {image_path}")
+    return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+
+def _load_rgb_video_frame(video_path, frame_index):
+    capture = cv2.VideoCapture(str(video_path))
+    if not capture.isOpened():
+        raise FileNotFoundError(f"Unable to open video: {video_path}")
+    capture.set(cv2.CAP_PROP_POS_FRAMES, int(frame_index))
+    ok, frame = capture.read()
+    capture.release()
+    if not ok or frame is None:
+        raise ValueError(f"Unable to read frame {frame_index} from video: {video_path}")
+    return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+
+def _select_representative_frame_indices(frame_count, rows=3):
+    if frame_count <= 0:
+        raise ValueError("wild_video_frames does not contain any source frames")
+    if frame_count <= rows:
+        return list(range(frame_count))
+    sampled = np.linspace(0, frame_count - 1, num=rows + 2, dtype=int)[1:-1]
+    return sampled.tolist()
+
+
+def plot_wild_video_frames_comparison(output_dir, frame_indices=None):
+    repo_root = Path(__file__).resolve().parents[3]
+    raw_dir = repo_root / "data" / "raw" / "wild_video_frames"
+    output_dir = Path(output_dir)
+    phase_videos = {
+        "part1": repo_root / "results" / "videos" / "part1" / "wild_video_frames_part1.mp4",
+        "part2": repo_root / "results" / "videos" / "part2" / "wild_video_frames_inpainted.mp4",
+        "part3": repo_root / "results" / "videos" / "part3" / "wild_video_frames_part3.mp4",
+    }
+
+    source_frames = sorted(raw_dir.glob("*.jpg"))
+    if not source_frames:
+        raise FileNotFoundError(f"No source frames found under {raw_dir}")
+    missing_videos = [path for path in phase_videos.values() if not path.exists()]
+    if missing_videos:
+        missing_text = ", ".join(str(path) for path in missing_videos)
+        raise FileNotFoundError(f"Missing wild_video_frames result videos: {missing_text}")
+
+    selected_indices = frame_indices or _select_representative_frame_indices(len(source_frames), rows=3)
+    fig, axes = plt.subplots(len(selected_indices), 4, figsize=(16.5, 4.2 * len(selected_indices)))
+    if len(selected_indices) == 1:
+        axes = np.expand_dims(axes, axis=0)
+
+    column_titles = ["Original", PHASE_LABELS["part1"], PHASE_LABELS["part2"], PHASE_LABELS["part3"]]
+    column_keys = [None, "part1", "part2", "part3"]
+
+    for col_idx, title in enumerate(column_titles):
+        axes[0, col_idx].set_title(title, fontsize=16, pad=12)
+
+    for row_idx, frame_index in enumerate(selected_indices):
+        if frame_index < 0 or frame_index >= len(source_frames):
+            raise IndexError(f"Requested frame index {frame_index} is outside 0..{len(source_frames) - 1}")
+
+        source_path = source_frames[frame_index]
+        display_name = source_path.stem
+        axes[row_idx, 0].imshow(_load_rgb_image(source_path))
+        axes[row_idx, 0].text(
+            -0.10,
+            0.50,
+            f"Frame {display_name}",
+            transform=axes[row_idx, 0].transAxes,
+            va="center",
+            ha="right",
+            fontsize=12,
+            rotation=90,
+        )
+
+        for col_idx, phase in enumerate(column_keys[1:], start=1):
+            axes[row_idx, col_idx].imshow(_load_rgb_video_frame(phase_videos[phase], frame_index))
+
+        for ax in axes[row_idx]:
+            ax.axis("off")
+
+    fig.suptitle("Qualitative Comparison on Wild Video Frames", fontsize=21, y=0.99)
+    fig.text(
+        0.5,
+        0.02,
+        "Representative early/mid/late frames from the unconstrained wild_video_frames sequence.",
+        ha="center",
+        fontsize=12,
+    )
+    finalize_figure_layout(fig, top=0.90, bottom=0.07, left=0.05, right=0.99, hspace=0.08, wspace=0.03)
+    save_figure(fig, output_dir, "13_wild_video_frames_comparison")
+
+
+def plot_iou_ecdf(iou_df, output_dir, stem="07_iou_ecdf"):
+    sequences = _present_sequences(iou_df)
     fig, axes = plt.subplots(1, len(sequences), figsize=(7.2 * len(sequences), 6.2), sharey=True)
     if len(sequences) == 1:
         axes = [axes]
@@ -358,8 +487,10 @@ def plot_iou_ecdf(iou_df, output_dir):
             legend.remove()
     add_top_center_legend(fig, handles, [PHASE_LABELS.get(label, label) for label in labels], y=0.96, ncol=3)
     fig.suptitle("IoU Distribution Dominance via ECDF", fontsize=20, y=0.995)
-    finalize_figure_layout(fig, top=0.82, bottom=0.11, wspace=0.18)
-    save_figure(fig, output_dir, "07_iou_ecdf")
+    if _contains_wild_sequence(iou_df):
+        fig.text(0.5, 0.02, PROXY_IOU_NOTE, ha="center", fontsize=11.5)
+    finalize_figure_layout(fig, top=0.82, bottom=0.16 if _contains_wild_sequence(iou_df) else 0.11, wspace=0.18)
+    save_figure(fig, output_dir, stem)
 
 
 def fit_and_plot_line(ax, x_values, y_values, color):
@@ -371,8 +502,8 @@ def fit_and_plot_line(ax, x_values, y_values, color):
     ax.plot(x_range, y_range, color=color, linewidth=2.2, alpha=0.95)
 
 
-def plot_iou_vs_union(iou_df, output_dir):
-    sequences = list(iou_df["sequence"].cat.categories)
+def plot_iou_vs_union(iou_df, output_dir, stem="08_iou_vs_union"):
+    sequences = _present_sequences(iou_df)
     fig, axes = plt.subplots(1, len(sequences), figsize=(7.5 * len(sequences), 6.3), sharey=True)
     if len(sequences) == 1:
         axes = [axes]
@@ -419,13 +550,16 @@ def plot_iou_vs_union(iou_df, output_dir):
     handles, labels = axes[0].get_legend_handles_labels()
     add_top_center_legend(fig, handles, labels, y=0.96, ncol=3)
     fig.suptitle("How Foreground Extent Relates to IoU", fontsize=20, y=0.995)
-    fig.text(0.5, 0.03, "Each point is one frame. Trend lines are simple linear fits.", ha="center", fontsize=12)
-    finalize_figure_layout(fig, top=0.82, bottom=0.15, wspace=0.20)
-    save_figure(fig, output_dir, "08_iou_vs_union")
+    footer_lines = ["Each point is one frame. Trend lines are simple linear fits."]
+    if _contains_wild_sequence(iou_df):
+        footer_lines.append(PROXY_IOU_NOTE)
+    fig.text(0.5, 0.02, "\n".join(footer_lines), ha="center", fontsize=11.5)
+    finalize_figure_layout(fig, top=0.82, bottom=0.20 if _contains_wild_sequence(iou_df) else 0.15, wspace=0.20)
+    save_figure(fig, output_dir, stem)
 
 
-def plot_quality_vs_valid_pixels(quality_df, output_dir):
-    sequences = list(quality_df["sequence"].cat.categories)
+def plot_quality_vs_valid_pixels(quality_df, output_dir, stem="09_quality_vs_valid_pixels"):
+    sequences = _present_sequences(quality_df)
     metrics = ["psnr", "ssim"]
     fig, axes = plt.subplots(len(metrics), len(sequences), figsize=(7.4 * len(sequences), 10.8), sharex="col")
 
@@ -477,10 +611,10 @@ def plot_quality_vs_valid_pixels(quality_df, output_dir):
     add_top_center_legend(fig, handles, labels, y=0.96, ncol=3)
     fig.suptitle("Quality Metrics versus Evaluated Background Area", fontsize=20, y=0.995)
     finalize_figure_layout(fig, top=0.82, bottom=0.09, hspace=0.10, wspace=0.20)
-    save_figure(fig, output_dir, "09_quality_vs_valid_pixels")
+    save_figure(fig, output_dir, stem)
 
 
-def plot_summary_heatmaps(summary_df, output_dir):
+def plot_summary_heatmaps(summary_df, output_dir, stem="10_metric_summary_heatmaps"):
     display_df = summary_df.copy()
     display_df["row_label"] = display_df["sequence_label"] + " | " + display_df["phase_label"].str.replace("Part ", "P")
     mean_columns = ["mean_iou", "weighted_iou", "mean_psnr", "mean_ssim"]
@@ -491,7 +625,8 @@ def plot_summary_heatmaps(summary_df, output_dir):
     mean_ann = display_df[mean_columns].round(3).astype(str).to_numpy()
     std_ann = display_df[std_columns].round(3).astype(str).to_numpy()
 
-    fig, axes = plt.subplots(1, 2, figsize=(16, 8), gridspec_kw={"width_ratios": [1.2, 0.9]})
+    fig_height = max(8.0, 2.8 + 0.65 * len(display_df))
+    fig, axes = plt.subplots(1, 2, figsize=(16, fig_height), gridspec_kw={"width_ratios": [1.2, 0.9]})
     sns.heatmap(
         mean_norm,
         annot=mean_ann,
@@ -526,9 +661,12 @@ def plot_summary_heatmaps(summary_df, output_dir):
     axes[1].set_ylabel("")
 
     fig.suptitle("Metric Summary Heatmaps", fontsize=20, y=0.99)
-    fig.text(0.5, 0.03, "Cell colors are normalized within each metric column so different scales remain comparable.", ha="center", fontsize=12)
-    finalize_figure_layout(fig, top=0.90, bottom=0.14, wspace=0.18)
-    save_figure(fig, output_dir, "10_metric_summary_heatmaps")
+    footer_lines = ["Cell colors are normalized within each metric column so different scales remain comparable."]
+    if _contains_wild_sequence(summary_df):
+        footer_lines.append(PROXY_IOU_NOTE)
+    fig.text(0.5, 0.02, "\n".join(footer_lines), ha="center", fontsize=11.5)
+    finalize_figure_layout(fig, top=0.90, bottom=0.18 if _contains_wild_sequence(summary_df) else 0.14, wspace=0.18)
+    save_figure(fig, output_dir, stem)
 
 
 def _blend_with_white(color, factor):
@@ -572,7 +710,7 @@ def build_gradient_cell_colors(dataframe, numeric_columns, cmap_name):
     return colors
 
 
-def plot_summary_table(summary_df, output_dir):
+def plot_summary_table(summary_df, output_dir, stem="11_metric_summary_table"):
     table_df = summary_df[
         [
             "sequence_label",
@@ -597,7 +735,8 @@ def plot_summary_table(summary_df, output_dir):
         color_df[column] = color_df[column].astype(float)
     cell_colors = build_gradient_cell_colors(color_df, numeric_for_color, "YlGnBu")
 
-    fig, ax = plt.subplots(figsize=(16, 5.4))
+    fig_height = max(5.4, 1.8 + 0.48 * len(table_df))
+    fig, ax = plt.subplots(figsize=(16, fig_height))
     ax.axis("off")
     table = ax.table(
         cellText=table_df.values,
@@ -608,11 +747,13 @@ def plot_summary_table(summary_df, output_dir):
     )
     style_table(table, cell_colors=cell_colors)
     ax.set_title("Metric Summary Table", fontsize=20, pad=18)
-    finalize_figure_layout(fig, top=0.88, bottom=0.08)
-    save_figure(fig, output_dir, "11_metric_summary_table")
+    if _contains_wild_sequence(summary_df):
+        fig.text(0.5, 0.02, PROXY_IOU_NOTE, ha="center", fontsize=11.5)
+    finalize_figure_layout(fig, top=0.88, bottom=0.12 if _contains_wild_sequence(summary_df) else 0.08)
+    save_figure(fig, output_dir, stem)
 
 
-def plot_paired_delta_summary_table(paired_summary_df, output_dir):
+def plot_paired_delta_summary_table(paired_summary_df, output_dir, stem="12_paired_delta_summary_table"):
     table_df = paired_summary_df[
         [
             "sequence_label",
@@ -643,7 +784,8 @@ def plot_paired_delta_summary_table(paired_summary_df, output_dir):
         color_df[column] = color_df[column].astype(float)
     cell_colors = build_gradient_cell_colors(color_df, ["Mean Delta IoU", "Mean Delta PSNR", "Mean Delta SSIM"], "RdYlGn")
 
-    fig, ax = plt.subplots(figsize=(17, 4.8))
+    fig_height = max(4.8, 1.8 + 0.44 * len(table_df))
+    fig, ax = plt.subplots(figsize=(17, fig_height))
     ax.axis("off")
     table = ax.table(
         cellText=table_df.values,
@@ -654,5 +796,7 @@ def plot_paired_delta_summary_table(paired_summary_df, output_dir):
     )
     style_table(table, cell_colors=cell_colors)
     ax.set_title("Paired Improvement Summary", fontsize=20, pad=18)
-    finalize_figure_layout(fig, top=0.88, bottom=0.08)
-    save_figure(fig, output_dir, "12_paired_delta_summary_table")
+    if _contains_wild_sequence(paired_summary_df):
+        fig.text(0.5, 0.02, PROXY_IOU_NOTE, ha="center", fontsize=11.5)
+    finalize_figure_layout(fig, top=0.88, bottom=0.12 if _contains_wild_sequence(paired_summary_df) else 0.08)
+    save_figure(fig, output_dir, stem)

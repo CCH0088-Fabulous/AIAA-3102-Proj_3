@@ -1,5 +1,16 @@
+from pathlib import Path
+import sys
+
+import cv2
 import numpy as np
 import pandas as pd
+
+CURRENT_DIR = Path(__file__).resolve().parent
+SRC_ROOT = CURRENT_DIR.parents[1]
+if str(SRC_ROOT) not in sys.path:
+    sys.path.append(str(SRC_ROOT))
+
+from common.metrics import build_background_valid_mask, compute_iou, compute_psnr, compute_ssim
 
 try:
     from .metric_figure_constants import PAIR_ORDER, PHASE_LABELS, PHASE_ORDER, sequence_label
@@ -7,7 +18,199 @@ except ImportError:
     from metric_figure_constants import PAIR_ORDER, PHASE_LABELS, PHASE_ORDER, sequence_label
 
 
+WILD_SEQUENCE_NAME = "wild_video_frames"
+
+
+def _list_image_paths(directory):
+    return sorted(
+        [
+            path
+            for pattern in ("*.png", "*.jpg", "*.jpeg")
+            for path in Path(directory).glob(pattern)
+        ]
+    )
+
+
+def _read_rgb_image(image_path):
+    image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    if image is None:
+        raise FileNotFoundError(f"Unable to read image: {image_path}")
+    return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+
+def _read_mask_image(mask_path):
+    image = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+    if image is None:
+        raise FileNotFoundError(f"Unable to read mask: {mask_path}")
+    return image
+
+
+def _align_frame(frame, reference_shape):
+    if frame.shape[:2] == reference_shape[:2]:
+        return frame
+    return cv2.resize(frame, (reference_shape[1], reference_shape[0]), interpolation=cv2.INTER_LINEAR)
+
+
+def _align_mask(mask, reference_shape):
+    if mask.shape[:2] == reference_shape[:2]:
+        return mask
+    return cv2.resize(mask, (reference_shape[1], reference_shape[0]), interpolation=cv2.INTER_NEAREST)
+
+
+def _load_video_frames(video_path, frame_count):
+    capture = cv2.VideoCapture(str(video_path))
+    if not capture.isOpened():
+        raise FileNotFoundError(f"Unable to open video: {video_path}")
+
+    frames = []
+    while len(frames) < frame_count:
+        ok, frame = capture.read()
+        if not ok or frame is None:
+            break
+        frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    capture.release()
+
+    if len(frames) < frame_count:
+        raise ValueError(f"Video {video_path} only yielded {len(frames)} frames, expected at least {frame_count}")
+    return frames
+
+
+def _build_consensus_mask(mask_triplet):
+    stacked = np.stack([(mask > 0).astype(np.uint8) for mask in mask_triplet], axis=0)
+    return (stacked.sum(axis=0) >= 2).astype(np.uint8) * 255
+
+
+def _summarize_mean(values):
+    numeric = pd.Series(values, dtype=float)
+    return float(numeric.mean()) if not numeric.empty else float("nan")
+
+
+def ensure_wild_video_metrics(metrics_root):
+    repo_root = Path(__file__).resolve().parents[3]
+    raw_dir = repo_root / "data" / "raw" / WILD_SEQUENCE_NAME
+    phase_assets = {
+        "part1": {
+            "mask_dir": repo_root / "results" / "masks" / "part1" / WILD_SEQUENCE_NAME,
+            "video_path": repo_root / "results" / "videos" / "part1" / "wild_video_frames_part1.mp4",
+        },
+        "part2": {
+            "mask_dir": repo_root / "results" / "masks" / "part2" / WILD_SEQUENCE_NAME / "combined",
+            "video_path": repo_root / "results" / "videos" / "part2" / "wild_video_frames_inpainted.mp4",
+        },
+        "part3": {
+            "mask_dir": repo_root / "results" / "masks" / "part3" / WILD_SEQUENCE_NAME / "combined",
+            "video_path": repo_root / "results" / "videos" / "part3" / "wild_video_frames_part3.mp4",
+        },
+    }
+
+    if not raw_dir.is_dir():
+        return
+    if any(not asset["mask_dir"].is_dir() or not asset["video_path"].is_file() for asset in phase_assets.values()):
+        return
+
+    source_paths = _list_image_paths(raw_dir)
+    phase_mask_paths = {phase: _list_image_paths(asset["mask_dir"]) for phase, asset in phase_assets.items()}
+    frame_count = min([len(source_paths)] + [len(paths) for paths in phase_mask_paths.values()])
+    if frame_count == 0:
+        return
+
+    source_paths = source_paths[:frame_count]
+    source_frames = [_read_rgb_image(path) for path in source_paths]
+    phase_video_frames = {
+        phase: _load_video_frames(asset["video_path"], frame_count) for phase, asset in phase_assets.items()
+    }
+    phase_masks = {
+        phase: [_read_mask_image(path) for path in paths[:frame_count]] for phase, paths in phase_mask_paths.items()
+    }
+
+    for frame_index in range(frame_count):
+        reference_shape = source_frames[frame_index].shape
+        for phase in PHASE_ORDER:
+            phase_video_frames[phase][frame_index] = _align_frame(phase_video_frames[phase][frame_index], reference_shape)
+            phase_masks[phase][frame_index] = _align_mask(phase_masks[phase][frame_index], reference_shape)
+
+    consensus_masks = [
+        _build_consensus_mask([phase_masks[phase][frame_index] for phase in PHASE_ORDER])
+        for frame_index in range(frame_count)
+    ]
+
+    metrics_root = Path(metrics_root)
+    for phase in PHASE_ORDER:
+        phase_output_dir = metrics_root / phase / WILD_SEQUENCE_NAME
+        phase_output_dir.mkdir(parents=True, exist_ok=True)
+
+        iou_rows = []
+        quality_rows = []
+        iou_values = []
+        psnr_values = []
+        ssim_values = []
+
+        for frame_index in range(frame_count):
+            predicted_mask = phase_masks[phase][frame_index]
+            reference_mask = consensus_masks[frame_index]
+            iou_stats = compute_iou(predicted_mask, reference_mask)
+            iou_values.append(iou_stats["iou"])
+            iou_rows.append(
+                {
+                    "phase": phase,
+                    "sequence": WILD_SEQUENCE_NAME,
+                    "frame_index": frame_index,
+                    "predicted_file": phase_mask_paths[phase][frame_index].name,
+                    "reference_file": "phase_consensus_majority_vote",
+                    "iou": iou_stats["iou"],
+                    "intersection": iou_stats["intersection"],
+                    "union": iou_stats["union"],
+                }
+            )
+
+            valid_mask = build_background_valid_mask(predicted_mask, None)
+            psnr_value = compute_psnr(source_frames[frame_index], phase_video_frames[phase][frame_index], valid_mask=valid_mask)
+            ssim_value = compute_ssim(source_frames[frame_index], phase_video_frames[phase][frame_index], valid_mask=valid_mask)
+            psnr_values.append(psnr_value)
+            ssim_values.append(ssim_value)
+            quality_rows.append(
+                {
+                    "phase": phase,
+                    "sequence": WILD_SEQUENCE_NAME,
+                    "frame_index": frame_index,
+                    "evaluation_mode": "background_preservation",
+                    "psnr": psnr_value,
+                    "ssim": ssim_value,
+                    "valid_pixels": int(np.count_nonzero(valid_mask)),
+                }
+            )
+
+        iou_rows.append(
+            {
+                "phase": phase,
+                "sequence": WILD_SEQUENCE_NAME,
+                "frame_index": "mean",
+                "predicted_file": frame_count,
+                "reference_file": "phase_consensus_majority_vote",
+                "iou": _summarize_mean(iou_values),
+                "intersection": "",
+                "union": "",
+            }
+        )
+        quality_rows.append(
+            {
+                "phase": phase,
+                "sequence": WILD_SEQUENCE_NAME,
+                "frame_index": "mean",
+                "evaluation_mode": "background_preservation",
+                "psnr": _summarize_mean(psnr_values),
+                "ssim": _summarize_mean(ssim_values),
+                "valid_pixels": "",
+            }
+        )
+
+        pd.DataFrame(iou_rows).to_csv(phase_output_dir / "iou_results.csv", index=False)
+        pd.DataFrame(quality_rows).to_csv(phase_output_dir / "psnr_ssim.csv", index=False)
+
+
 def load_metric_data(metrics_root):
+    ensure_wild_video_metrics(metrics_root)
+
     iou_frames = []
     quality_frames = []
 

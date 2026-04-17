@@ -16,6 +16,13 @@ METRIC_LABELS = {
     "ssim": "SSIM",
 }
 
+SEQUENCE_DISPLAY_NAMES = {
+    "bmx-trees": "BMX-Trees",
+    "tennis": "Tennis",
+    "wild_video_frames": "Wild Video",
+}
+
 
 def sequence_label(sequence_name):
-    return sequence_name.replace("-", " ").replace("_", " ").title()
+    sequence_name = str(sequence_name)
+    return SEQUENCE_DISPLAY_NAMES.get(sequence_name, sequence_name.replace("-", " ").replace("_", " ").title())
