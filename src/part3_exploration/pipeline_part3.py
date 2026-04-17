@@ -192,6 +192,12 @@ def normalize_masks(raw_masks):
     return [((np.asarray(raw_mask) > 0).astype(np.uint8) * 255) for raw_mask in raw_masks]
 
 
+def resolve_output_sequence_name(sequence_name, max_frames=None):
+    if max_frames is None:
+        return sequence_name
+    return f"{sequence_name}_maxframes{max_frames}"
+
+
 def export_visualizations(
     frame_files,
     candidate_masks_per_frame,
@@ -298,10 +304,14 @@ def main():
             f"Expected combined masks under {coarse_masks_dir} or object masks under {baseline_objects_dir}."
         )
 
+    output_sequence_name = resolve_output_sequence_name(sequence_spec["output_name"], args.max_frames)
+
     print(f"Sequence: {sequence_spec['output_name']}")
     print(f"Frames: {input_frames_dir}")
     print(f"Combined baseline masks: {coarse_masks_dir}")
     print(f"Object baseline masks: {baseline_objects_dir}")
+    if output_sequence_name != sequence_spec["output_name"]:
+        print(f"Output sequence name: {output_sequence_name} (debug run, outputs kept separate)")
 
     baseline_object_masks = load_object_masks(frame_files, baseline_objects_dir)
     mask_source = resolve_baseline_mask_source(phase_cfg, baseline_object_masks)
@@ -337,7 +347,7 @@ def main():
         processed_masks = postprocess_masks(raw_refined_masks, postprocess_cfg)
 
     masks_root = get_phase_output_dir(phase_cfg, "masks_dir") or "results/masks/part3"
-    sequence_masks_dir = os.path.join(masks_root, sequence_spec["output_name"])
+    sequence_masks_dir = os.path.join(masks_root, output_sequence_name)
     object_masks_dir = os.path.join(sequence_masks_dir, "objects")
     combined_masks_dir = os.path.join(sequence_masks_dir, "combined")
 
@@ -435,7 +445,7 @@ def main():
     os.makedirs(output_video_dir, exist_ok=True)
     output_video_path = os.path.join(
         output_video_dir,
-        build_video_filename(common_cfg, sequence_spec["output_name"], phase_cfg.get("phase", {}).get("slug", "part3")),
+        build_video_filename(common_cfg, output_sequence_name, phase_cfg.get("phase", {}).get("slug", "part3")),
     )
 
     print("Inpainting with ProPainter using SD keyframe priors...")
@@ -448,7 +458,7 @@ def main():
         processed_masks,
         restored_frames,
         visualization_root,
-        sequence_spec["output_name"],
+        output_sequence_name,
         common_cfg,
         visualization_cfg,
     )

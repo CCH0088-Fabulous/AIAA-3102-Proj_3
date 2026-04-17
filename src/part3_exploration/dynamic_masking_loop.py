@@ -76,9 +76,9 @@ def main():
     sam2_weights = part2_cfg.get("models", {}).get("segmentation", {}).get("weights_dir", "models/sam2")
     sam2_tracker = SAM2MaskGenerator(weights_dir=sam2_weights)
     
-    prompts = load_prompts_from_config(part2_cfg, args.sequence)
+    prompts = load_prompts_from_config(part2_cfg, sequence_spec["output_name"])
     if not prompts:
-        print(f"Warning: No prompts found for sequence {args.sequence}")
+        print(f"Warning: No prompts found for sequence {sequence_spec['output_name']}")
         
     print(f"[Step 1] Running SAM2 Tracking...")
     video_segments = sam2_tracker.generate(input_frames_dir, prompts=prompts)

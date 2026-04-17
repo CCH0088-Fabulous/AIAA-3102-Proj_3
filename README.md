@@ -49,9 +49,11 @@ Part 1 currently supports dataset keys defined in [configs/common.yaml](configs/
 
 - `bmx-trees`
 - `tennis`
+- `parkour`
+- `dance-twirl`
 - `davis` sequences resolved from DAVIS roots
 
-For compatibility, `bmx_trees` is also accepted and mapped to `bmx-trees` internally.
+For compatibility, `bmx_trees` and `dance_twirl` are also accepted and mapped to their canonical names internally.
 
 ## Part 1 Method
 
