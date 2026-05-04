@@ -114,7 +114,7 @@ python src/part1_baseline/pipeline_part1.py \
 Wrapper script:
 
 ```bash
-bash scripts/run_part1.sh --sequence bmx-trees --max-frames 3
+bash scripts/run_part1.sh
 ```
 
 ### Evaluation
@@ -202,7 +202,7 @@ python src/part2_sota/pipeline_part2.py \
 Wrapper script:
 
 ```bash
-bash scripts/run_part2.sh --sequence parkour
+bash scripts/run_part2.sh
 ```
 
 ### Evaluation
@@ -291,7 +291,7 @@ python src/part3_exploration/pipeline_part3.py \
 Wrapper script:
 
 ```bash
-bash scripts/run_part3.sh --sequence dance-twirl
+bash scripts/run_part3.sh
 ```
 
 ### Evaluation
@@ -363,6 +363,16 @@ models/ProPainter
 
 The SAM2 repository should include checkpoints under `models/sam2/checkpoints/`. ProPainter weights are downloaded into `models/ProPainter/weights/` on first use.
 
+## Evaluation
+
+### Wrapper Script
+
+Run all evaluation commands in sequence with:
+
+```bash
+bash run_all_metrics.sh
+```
+
 ## Figures
 
 `src/common/figure_scripts/` contains the figure-generation entrypoints and shared plotting modules used to convert metric CSVs into publication-style PNG figures.
@@ -373,6 +383,14 @@ The SAM2 repository should include checkpoints under `models/sam2/checkpoints/`.
 - `generate_metric_figures_davis.py` generates the DAVIS-only figure suite for `parkour` and `dance-twirl` under `results/visualizations/figures/davis/`
 - `generate_wild_comparison.py` generates the Wild Video qualitative comparison figure
 - `metric_figure_data.py`, `metric_figure_plots.py`, `metric_figure_output.py`, and `metric_figure_constants.py` provide the shared data loading, plotting, output, and naming logic
+
+### Wrapper Script
+
+Run all three figure-generation commands in sequence with:
+
+```bash
+bash run_all_figure.sh
+```
 
 ### Prerequisites
 
